@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>DiffNote</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <header class="brand">
+        <div class="brand-mark">D</div>
+        <div>
+          <strong>DiffNote</strong>
+          <span id="repo-name">Loading repository...</span>
+        </div>
+        <button id="open-settings" class="sidebar-settings" type="button" aria-label="Open settings">Settings</button>
+      </header>
+      <section class="project-section">
+        <label for="project-select">Project</label>
+        <div class="project-picker">
+          <select id="project-select" aria-label="Select project"></select>
+          <button id="add-project" type="button" aria-label="Add project">+</button>
+        </div>
+      </section>
+      <section class="branch-section">
+        <label for="branch-source">Source</label>
+        <select id="branch-source" aria-label="Select local or remote source"></select>
+        <label for="branch-search">Branch</label>
+        <input id="branch-search" type="text" list="branch-suggestions" aria-label="Search and select branch" autocomplete="off">
+        <datalist id="branch-suggestions"></datalist>
+      </section>
+      <div class="list-heading">
+        <span>Commits</span>
+        <span id="commit-count"></span>
+      </div>
+      <div class="commit-search-wrap">
+        <input id="commit-search" type="search" placeholder="Search commit messages" aria-label="Search commit messages">
+      </div>
+      <nav id="commit-list" class="commit-list" aria-label="Commit history"></nav>
+    </aside>
+
+    <main class="review-pane">
+      <header class="review-toolbar">
+        <div id="commit-heading" class="commit-heading">
+          <h1>Select a commit</h1>
+          <p>Choose a branch and commit from the left.</p>
+        </div>
+        <div class="toolbar-actions">
+          <span id="save-status" class="save-status">Saved</span>
+          <button id="copy-review" class="primary-button" type="button" disabled>
+            Copy review
+            <kbd>Ctrl Shift Enter</kbd>
+          </button>
+        </div>
+      </header>
+      <div id="status-banner" class="status-banner" hidden></div>
+      <section id="diff-root" class="diff-root"></section>
+    </main>
+  </div>
+  <dialog id="settings-dialog" class="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <header>
+        <div>
+          <h2>Review settings</h2>
+          <p>Adjust DiffNote for comfortable code review.</p>
+        </div>
+        <button class="dialog-close" value="cancel" aria-label="Close settings" type="submit">&times;</button>
+      </header>
+      <div class="settings-grid">
+        <label>Code font
+          <select name="font">
+            <option value="github">GitHub monospace</option>
+            <option value="system">System monospace</option>
+            <option value="jetbrains">JetBrains Mono</option>
+            <option value="fira">Fira Code</option>
+          </select>
+        </label>
+        <label>Font size
+          <input name="fontSize" type="range" min="12" max="20" step="1">
+          <output data-for="fontSize"></output>
+        </label>
+        <label>Line height
+          <input name="lineHeight" type="range" min="18" max="34" step="1">
+          <output data-for="lineHeight"></output>
+        </label>
+        <label>Theme
+          <select name="theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label>Sidebar width
+          <input name="sidebarWidth" type="range" min="260" max="500" step="10">
+          <output data-for="sidebarWidth"></output>
+        </label>
+        <label>Initial diff context
+          <select name="contextLines">
+            <option value="0">Changed lines only</option>
+            <option value="3">3 lines</option>
+            <option value="10">10 lines</option>
+            <option value="20">20 lines</option>
+            <option value="50">50 lines</option>
+          </select>
+        </label>
+        <label class="toggle-setting"><input name="wrapLines" type="checkbox"> Wrap long code lines</label>
+        <label class="toggle-setting"><input name="collapseViewed" type="checkbox"> Collapse files marked Viewed</label>
+      </div>
+      <footer>
+        <button id="reset-settings" class="icon-button" type="button">Reset defaults</button>
+        <button class="primary-button" value="apply" type="submit">Apply settings</button>
+      </footer>
+    </form>
+  </dialog>
+  <dialog id="project-dialog" class="project-dialog">
+    <form id="project-form" method="dialog">
+      <header>
+        <div>
+          <h2>Add project</h2>
+          <p>Enter the path to a local Git repository.</p>
+        </div>
+        <button class="dialog-close" value="cancel" aria-label="Close project dialog" type="submit">&times;</button>
+      </header>
+      <label>Repository path
+        <input name="path" type="text" list="project-path-suggestions" placeholder="/home/user/project" autocomplete="off" required>
+        <datalist id="project-path-suggestions"></datalist>
+      </label>
+      <footer>
+        <button class="icon-button" value="cancel" type="submit">Cancel</button>
+        <button class="primary-button" value="add" type="submit">Add project</button>
+      </footer>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
