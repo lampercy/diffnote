@@ -47,10 +47,11 @@ const elements = {
   addProject: document.querySelector("#add-project"),
   branchSource: document.querySelector("#branch-source"),
   branchSearch: document.querySelector("#branch-search"),
-  branchSuggestions: document.querySelector("#branch-suggestions"),
+  branchSelect: document.querySelector("#branch-select"),
   commitSearch: document.querySelector("#commit-search"),
   commitCount: document.querySelector("#commit-count"),
   commitList: document.querySelector("#commit-list"),
+  reviewPane: document.querySelector(".review-pane"),
   commitHeading: document.querySelector("#commit-heading"),
   copyReview: document.querySelector("#copy-review"),
   saveStatus: document.querySelector("#save-status"),
@@ -102,6 +103,7 @@ async function initialize() {
     if (!state.repository) {
       elements.branchSource.disabled = true;
       elements.branchSearch.disabled = true;
+      elements.branchSelect.disabled = true;
       elements.commitList.replaceChildren(emptyState("No project", "Add a local Git repository to begin reviewing."));
       elements.diffRoot.replaceChildren(emptyState("Add a project", "Use the + button in the Project section."));
       return;
@@ -134,7 +136,7 @@ function renderProjects() {
 function renderBranches() {
   elements.branchSource.replaceChildren(option("local", "Local"));
   if (state.branches.length === 0) {
-    elements.branchSearch.value = "HEAD";
+    elements.branchSelect.replaceChildren(option("HEAD", "HEAD"));
     return;
   }
 
@@ -144,18 +146,28 @@ function renderBranches() {
   }
   for (const remote of [...remotes].sort()) elements.branchSource.append(option(remote, remote));
   elements.branchSource.value = state.branchSource;
-  renderBranchSuggestions();
+  elements.branchSearch.value = "";
+  renderBranchOptions();
 }
 
-function renderBranchSuggestions() {
-  elements.branchSuggestions.replaceChildren();
-  const branches = branchesForSource(state.branchSource);
+function renderBranchOptions() {
+  elements.branchSelect.replaceChildren();
+  const query = elements.branchSearch.value.trim().toLowerCase();
+  const branches = branchesForSource(state.branchSource).filter((branch) =>
+    branchDisplayName(branch.name, state.branchSource).toLowerCase().includes(query));
   for (const branch of branches) {
     const display = branchDisplayName(branch.name, state.branchSource);
-    elements.branchSuggestions.append(option(display, display));
+    elements.branchSelect.append(option(branch.name, display));
   }
-  const selected = state.branches.find((branch) => branch.name === state.selectedRef);
-  elements.branchSearch.value = selected ? branchDisplayName(selected.name, state.branchSource) : "";
+  if (branches.some((branch) => branch.name === state.selectedRef)) {
+    elements.branchSelect.value = state.selectedRef;
+  } else {
+    const placeholder = option("", branches.length ? "Select branch..." : "No matching branches");
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    elements.branchSelect.prepend(placeholder);
+  }
+  elements.branchSelect.disabled = branches.length === 0;
 }
 
 function branchesForSource(source) {
@@ -424,7 +436,7 @@ function renderFile(file) {
       expand.type = "button";
       expand.className = "expand-context";
       expand.textContent = "Expand context";
-      expand.addEventListener("click", expandContext);
+      expand.addEventListener("click", (event) => expandContext(event.currentTarget));
       header.prepend(expand);
     }
     cell.append(header);
@@ -438,6 +450,7 @@ function renderFile(file) {
         : [];
       const row = document.createElement("tr");
       row.className = `line-row ${line.kind}${lineComments.length ? " has-comment" : ""}`;
+      if (anchor) row.dataset.anchor = anchorKey(anchor);
       row.append(lineNumberCell(line.oldLine), lineNumberCell(line.newLine));
       const codeCell = document.createElement("td");
       codeCell.className = "line-code";
@@ -474,8 +487,15 @@ function fileViewKey(file) {
   return `${state.commit?.hash || ""}\u0000${file.oldPath}\u0000${file.newPath}`;
 }
 
-async function expandContext() {
+function anchorKey(anchor) {
+  return JSON.stringify([anchor.filePath, anchor.side, anchor.line, anchor.context]);
+}
+
+async function expandContext(button) {
   if (!state.commit || state.contextLines >= 100) return;
+  const anchorRow = nextAnchorRow(button.closest("tr"));
+  const viewportTop = anchorRow?.getBoundingClientRect().top;
+  const viewportAnchor = anchorRow?.dataset.anchor;
   const hash = state.commit.hash;
   const contextLines = Math.min(100, state.contextLines + 10);
   const sequence = ++state.loadSequence;
@@ -486,9 +506,21 @@ async function expandContext() {
     state.commit = commit;
     state.contextLines = contextLines;
     renderDiff();
+    if (viewportAnchor && viewportTop != null) {
+      const restoredRow = [...elements.diffRoot.querySelectorAll(".line-row[data-anchor]")]
+        .find((row) => row.dataset.anchor === viewportAnchor);
+      if (restoredRow) elements.reviewPane.scrollTop += restoredRow.getBoundingClientRect().top - viewportTop;
+    }
   } catch (error) {
     if (sequence === state.loadSequence) showToast(`Unable to expand: ${error.message}`);
   }
+}
+
+function nextAnchorRow(row) {
+  for (let current = row?.nextElementSibling; current; current = current.nextElementSibling) {
+    if (current.dataset.anchor) return current;
+  }
+  return null;
 }
 
 function appendHighlightedCode(element, source, path) {
@@ -981,22 +1013,19 @@ elements.branchSource.addEventListener("change", async () => {
   const first = branchesForSource(state.branchSource)[0];
   if (!first) return;
   state.selectedRef = first.name;
-  renderBranchSuggestions();
+  elements.branchSearch.value = "";
+  renderBranchOptions();
   if (!await loadCommits()) {
     state.branchSource = previousSource;
     state.selectedRef = previousRef;
     renderBranches();
   }
 });
-elements.branchSearch.addEventListener("change", async () => {
-  const selected = branchesForSource(state.branchSource).find((branch) =>
-    branchDisplayName(branch.name, state.branchSource).toLowerCase() === elements.branchSearch.value.trim().toLowerCase());
-  if (!selected) {
-    renderBranchSuggestions();
-    return;
-  }
+elements.branchSearch.addEventListener("input", renderBranchOptions);
+elements.branchSelect.addEventListener("change", async () => {
+  if (!elements.branchSelect.value) return;
   const previousRef = state.loadedRef;
-  state.selectedRef = selected.name;
+  state.selectedRef = elements.branchSelect.value;
   if (!await loadCommits()) {
     state.selectedRef = previousRef;
     state.branchSource = branchSourceFor(previousRef);

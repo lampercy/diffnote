@@ -29,9 +29,10 @@
       <section class="branch-section">
         <label for="branch-source">Source</label>
         <select id="branch-source" aria-label="Select local or remote source"></select>
-        <label for="branch-search">Branch</label>
-        <input id="branch-search" type="text" list="branch-suggestions" aria-label="Search and select branch" autocomplete="off">
-        <datalist id="branch-suggestions"></datalist>
+        <label for="branch-search">Search branches</label>
+        <input id="branch-search" type="search" placeholder="Filter branch names" aria-label="Search branches" autocomplete="off">
+        <label for="branch-select">Branch</label>
+        <select id="branch-select" aria-label="Select branch"></select>
       </section>
       <div class="list-heading">
         <span>Commits</span>

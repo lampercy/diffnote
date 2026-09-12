@@ -1,6 +1,7 @@
-.PHONY: build check clean dev fmt install lint test
+.PHONY: build check clean dev fmt install lint test uninstall
 
 ARGS ?=
+BINDIR ?= $(HOME)/.local/bin
 
 dev:
 	go run . $(ARGS)
@@ -20,8 +21,12 @@ fmt:
 
 check: test lint
 
-install:
-	go install .
+install: build
+	install -d "$(BINDIR)"
+	install -m 0755 diffnote "$(BINDIR)/diffnote"
+
+uninstall:
+	rm -f "$(BINDIR)/diffnote"
 
 clean:
 	rm -f diffnote coverage.out

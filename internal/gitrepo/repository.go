@@ -167,7 +167,7 @@ func (r *Repository) CommitPageSearch(ref string, limit, offset int, search stri
 		"log",
 		"--topo-order",
 		"--date=iso-strict",
-		"--format=%H%x00%h%x00%P%x00%an%x00%aI%x00%s",
+		"--format=%H%x00%h%x00%P%x00%an%x00%cI%x00%s",
 		"-n", strconv.Itoa(limit),
 		"--skip", strconv.Itoa(offset),
 	}
@@ -259,7 +259,7 @@ func (r *Repository) CommitWithContext(hash string, contextLines int) (*CommitDe
 	metadata, err := runAt(r.Root,
 		"show", "-s",
 		"--date=iso-strict",
-		"--format=%H%x00%h%x00%P%x00%an%x00%aI%x00%s%x00%b",
+		"--format=%H%x00%h%x00%P%x00%an%x00%cI%x00%s%x00%b",
 		"--end-of-options", hash,
 	)
 	if err != nil {

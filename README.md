@@ -19,4 +19,6 @@ make check
 make install
 ```
 
+`make install` installs to `~/.local/bin/diffnote`. Override the destination when needed, for example `make install BINDIR=~/bin`. Remove it with `make uninstall` using the same `BINDIR`.
+
 Pass CLI options during development with `ARGS`, for example `make dev ARGS=--no-browser`.
