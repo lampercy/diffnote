@@ -226,35 +226,89 @@ async function loadCommits() {
 function renderCommitList() {
   elements.commitCount.textContent = state.commitTotal;
   elements.commitList.replaceChildren();
+  const graph = commitGraph(state.commits);
   for (const commit of state.commits) {
-    elements.commitList.append(renderCommitCard(commit));
+    elements.commitList.append(renderCommitCard(commit, graph.get(commit.hash)));
   }
 }
 
-function renderCommitCard(commit) {
-  const button = document.createElement("button");
-    button.type = "button";
-    button.className = "commit-card";
-    button.dataset.hash = commit.hash;
-    button.title = commit.subject;
+function commitGraph(commits) {
+  const lanes = [];
+  const graph = new Map();
+  for (const commit of commits) {
+    let column = lanes.indexOf(commit.hash);
+    if (column < 0) {
+      column = lanes.length;
+      lanes.push(commit.hash);
+    }
+    const active = [...lanes];
+    const parents = commit.parents || [];
+    lanes.splice(column, 1, ...parents);
+    graph.set(commit.hash, { active, column, parents: parents.length });
+  }
+  return graph;
+}
 
-    const graph = document.createElement("span");
-    graph.className = "graph";
-    const content = document.createElement("span");
-    const subject = document.createElement("span");
-    subject.className = "commit-subject";
-    subject.textContent = commit.subject;
-    const meta = document.createElement("span");
-    meta.className = "commit-meta";
-    const hash = document.createElement("code");
-    hash.textContent = commit.shortHash;
-    const date = document.createElement("span");
-    date.textContent = relativeDate(commit.date);
-    meta.append(hash, date);
-    content.append(subject, meta);
-    button.append(graph, content);
-    button.addEventListener("click", () => selectCommit(commit.hash));
+function renderCommitCard(commit, graphState) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "commit-card";
+  button.dataset.hash = commit.hash;
+  button.title = commit.subject;
+
+  const graph = renderGraph(graphState);
+  const content = document.createElement("span");
+  const title = document.createElement("span");
+  title.className = "commit-title";
+  for (const branch of branchesAt(commit.hash)) {
+    const ref = document.createElement("span");
+    ref.className = `commit-ref${branch.current ? " current" : ""}`;
+    ref.textContent = branch.name;
+    title.append(ref);
+  }
+  const subject = document.createElement("span");
+  subject.className = "commit-subject";
+  subject.textContent = commit.subject;
+  title.append(subject);
+  const meta = document.createElement("span");
+  meta.className = "commit-meta";
+  const hash = document.createElement("code");
+  hash.textContent = commit.shortHash;
+  const date = document.createElement("span");
+  date.textContent = relativeDate(commit.date);
+  meta.append(hash, date, changeStats(commit.filesChanged, commit.additions, commit.deletions));
+  content.append(title, meta);
+  button.append(graph, content);
+  button.addEventListener("click", () => selectCommit(commit.hash));
   return button;
+}
+
+function branchesAt(hash) {
+  return state.branches.filter((branch) => branch.hash === hash).sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name));
+}
+
+function renderGraph(graphState) {
+  const graph = document.createElement("span");
+  graph.className = "graph";
+  const columns = Math.max(1, graphState.active.length, graphState.column + graphState.parents);
+  graph.style.width = `${columns * 12}px`;
+  for (let column = 0; column < graphState.active.length; column++) {
+    const line = document.createElement("span");
+    line.className = "graph-line";
+    line.style.left = `${column * 12 + 5}px`;
+    graph.append(line);
+  }
+  const node = document.createElement("span");
+  node.className = "graph-node";
+  node.style.left = `${graphState.column * 12 + 1}px`;
+  graph.append(node);
+  for (let parent = 1; parent < graphState.parents; parent++) {
+    const merge = document.createElement("span");
+    merge.className = "graph-merge";
+    merge.style.left = `${(graphState.column + parent - 1) * 12 + 5}px`;
+    graph.append(merge);
+  }
+  return graph;
 }
 
 async function loadMoreCommits() {
@@ -333,7 +387,8 @@ function renderCommitHeading() {
     detail.textContent = "Choose a branch and commit from the left.";
   } else {
     title.textContent = state.commit.subject;
-    detail.textContent = `${state.commit.shortHash} by ${state.commit.author} • ${formatDate(state.commit.date)}`;
+    detail.textContent = `${state.commit.shortHash} by ${state.commit.author} • ${formatDate(state.commit.date)} • `;
+    detail.append(changeStats(state.commit.filesChanged, state.commit.additions, state.commit.deletions));
   }
   elements.commitHeading.append(title, detail);
   updateCopyButton();
@@ -377,6 +432,7 @@ function renderFile(file) {
   const name = document.createElement("span");
   name.className = "file-name";
   name.textContent = file.status === "deleted" ? file.oldPath : file.newPath;
+  const stats = changeStats(null, file.additions, file.deletions);
   const viewed = document.createElement("label");
   viewed.className = "viewed-control";
   const checkbox = document.createElement("input");
@@ -407,7 +463,7 @@ function renderFile(file) {
       showToast(`Unable to update viewed file: ${error.message}`);
     });
   });
-  header.append(status, name, viewed);
+  header.append(status, name, stats, viewed);
   section.append(header);
 
   if (file.binary || !file.hunks.length) {
@@ -474,6 +530,24 @@ function renderFile(file) {
   table.append(body);
   section.append(table);
   return section;
+}
+
+function changeStats(files, additions, deletions) {
+  const stats = document.createElement("span");
+  stats.className = "change-stats";
+  if (files != null) {
+    const fileCount = document.createElement("span");
+    fileCount.textContent = `${files} file${files === 1 ? "" : "s"}`;
+    stats.append(fileCount);
+  }
+  const added = document.createElement("span");
+  added.className = "stat-additions";
+  added.textContent = `+${additions || 0}`;
+  const deleted = document.createElement("span");
+  deleted.className = "stat-deletions";
+  deleted.textContent = `-${deletions || 0}`;
+  stats.append(added, deleted);
+  return stats;
 }
 
 function lineNumberCell(value) {

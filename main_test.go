@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,6 +134,28 @@ func TestReviewAPI(t *testing.T) {
 	app.ServeHTTP(wrongHost, wrongHostRequest)
 	if wrongHost.Code != http.StatusForbidden {
 		t.Fatalf("invalid host returned %d, want 403", wrongHost.Code)
+	}
+}
+
+func TestAllowedRequestHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		address  *net.TCPAddr
+		allowLAN bool
+		want     string
+		wantErr  bool
+	}{
+		{name: "loopback", address: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8965}, want: "127.0.0.1:8965"},
+		{name: "lan listener", address: &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8965}, allowLAN: true},
+		{name: "missing lan host", address: &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8965}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := allowedRequestHost(test.address, test.allowLAN)
+			if (err != nil) != test.wantErr || got != test.want {
+				t.Fatalf("allowedRequestHost() = %q, %v; want %q, error=%t", got, err, test.want, test.wantErr)
+			}
+		})
 	}
 }
 

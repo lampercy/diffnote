@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -40,13 +41,22 @@ type Branch struct {
 }
 
 type Commit struct {
-	Hash      string   `json:"hash"`
-	ShortHash string   `json:"shortHash"`
-	Parents   []string `json:"parents"`
-	Author    string   `json:"author"`
-	Date      string   `json:"date"`
-	Subject   string   `json:"subject"`
+	Hash         string   `json:"hash"`
+	ShortHash    string   `json:"shortHash"`
+	Parents      []string `json:"parents"`
+	Author       string   `json:"author"`
+	Date         string   `json:"date"`
+	Subject      string   `json:"subject"`
+	FilesChanged int      `json:"filesChanged"`
+	Additions    int      `json:"additions"`
+	Deletions    int      `json:"deletions"`
 }
+
+var (
+	filesChangedPattern = regexp.MustCompile(`(\d+) files? changed`)
+	insertionsPattern   = regexp.MustCompile(`(\d+) insertions?\(\+\)`)
+	deletionsPattern    = regexp.MustCompile(`(\d+) deletions?\(-\)`)
+)
 
 type CommitDetail struct {
 	Commit
@@ -166,8 +176,10 @@ func (r *Repository) CommitPageSearch(ref string, limit, offset int, search stri
 	args := []string{
 		"log",
 		"--topo-order",
+		"--shortstat",
+		"--diff-merges=first-parent",
 		"--date=iso-strict",
-		"--format=%H%x00%h%x00%P%x00%an%x00%cI%x00%s",
+		"--format=%x1e%H%x00%h%x00%P%x00%an%x00%cI%x00%s",
 		"-n", strconv.Itoa(limit),
 		"--skip", strconv.Itoa(offset),
 	}
@@ -181,8 +193,13 @@ func (r *Repository) CommitPageSearch(ref string, limit, offset int, search stri
 	}
 
 	var commits []Commit
-	for _, record := range strings.Split(strings.TrimSpace(output), "\n") {
-		parts := strings.Split(record, "\x00")
+	for _, record := range strings.Split(output, "\x1e") {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		metadata, stats, _ := strings.Cut(record, "\n")
+		parts := strings.Split(metadata, "\x00")
 		if len(parts) != 6 {
 			continue
 		}
@@ -191,15 +208,27 @@ func (r *Repository) CommitPageSearch(ref string, limit, offset int, search stri
 			parents = strings.Fields(parts[2])
 		}
 		commits = append(commits, Commit{
-			Hash:      parts[0],
-			ShortHash: parts[1],
-			Parents:   parents,
-			Author:    parts[3],
-			Date:      parts[4],
-			Subject:   parts[5],
+			Hash:         parts[0],
+			ShortHash:    parts[1],
+			Parents:      parents,
+			Author:       parts[3],
+			Date:         parts[4],
+			Subject:      parts[5],
+			FilesChanged: statValue(filesChangedPattern, stats),
+			Additions:    statValue(insertionsPattern, stats),
+			Deletions:    statValue(deletionsPattern, stats),
 		})
 	}
 	return commits, nil
+}
+
+func statValue(pattern *regexp.Regexp, value string) int {
+	match := pattern.FindStringSubmatch(value)
+	if len(match) != 2 {
+		return 0
+	}
+	result, _ := strconv.Atoi(match[1])
+	return result
 }
 
 func (r *Repository) CommitCount(ref string) (int, error) {
@@ -286,6 +315,11 @@ func (r *Repository) CommitWithContext(hash string, contextLines int) (*CommitDe
 		}
 	}
 	patchID := canonicalPatchID(identityPatch)
+	additions, deletions := 0, 0
+	for _, file := range files {
+		additions += file.Additions
+		deletions += file.Deletions
+	}
 
 	parents := []string{}
 	if parts[2] != "" {
@@ -293,12 +327,15 @@ func (r *Repository) CommitWithContext(hash string, contextLines int) (*CommitDe
 	}
 	return &CommitDetail{
 		Commit: Commit{
-			Hash:      parts[0],
-			ShortHash: parts[1],
-			Parents:   parents,
-			Author:    parts[3],
-			Date:      parts[4],
-			Subject:   parts[5],
+			Hash:         parts[0],
+			ShortHash:    parts[1],
+			Parents:      parents,
+			Author:       parts[3],
+			Date:         parts[4],
+			Subject:      parts[5],
+			FilesChanged: len(files),
+			Additions:    additions,
+			Deletions:    deletions,
 		},
 		Body:    strings.TrimSpace(parts[6]),
 		PatchID: patchID,

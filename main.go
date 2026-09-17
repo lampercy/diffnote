@@ -97,7 +97,8 @@ func main() {
 func run(args []string) error {
 	flags := flag.NewFlagSet("diffnote", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	addr := flags.String("addr", "127.0.0.1:0", "loopback address to listen on")
+	addr := flags.String("addr", "127.0.0.1:0", "address to listen on")
+	allowLAN := flags.Bool("allow-lan", false, "allow a non-loopback listener and requests from the local network")
 	noBrowser := flags.Bool("no-browser", false, "do not open a browser")
 	database := flags.String("database", "", "review database path")
 	flags.Usage = func() {
@@ -145,16 +146,24 @@ func run(args []string) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	tcpAddress, ok := listener.Addr().(*net.TCPAddr)
-	if !ok || !tcpAddress.IP.IsLoopback() {
+	if !ok {
 		listener.Close()
-		return errors.New("refusing to listen on a non-loopback address")
+		return errors.New("listener is not a TCP address")
+	}
+	requestHost, err := allowedRequestHost(tcpAddress, *allowLAN)
+	if err != nil {
+		listener.Close()
+		return err
 	}
 	httpServer := &http.Server{
-		Handler:           app.routes(listener.Addr().String()),
+		Handler:           app.routes(requestHost),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	url := "http://" + listener.Addr().String()
+	url := "http://" + requestHost
+	if requestHost == "" {
+		url = "the configured network address"
+	}
 	if repo == nil {
 		log.Printf("DiffNote is ready at %s; add a project in the browser", url)
 	} else {
@@ -178,6 +187,16 @@ func run(args []string) error {
 		return err
 	}
 	return nil
+}
+
+func allowedRequestHost(address *net.TCPAddr, allowLAN bool) (string, error) {
+	if address.IP.IsLoopback() {
+		return address.String(), nil
+	}
+	if !allowLAN {
+		return "", errors.New("a non-loopback listener requires -allow-lan")
+	}
+	return "", nil
 }
 
 func (s *server) routes(allowedHost string) http.Handler {
@@ -626,7 +645,7 @@ func securityHeaders(next http.Handler, allowedHost string) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if request.Host != allowedHost {
+		if allowedHost != "" && request.Host != allowedHost {
 			writeError(w, http.StatusForbidden, errors.New("invalid host"))
 			return
 		}

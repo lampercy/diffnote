@@ -9,11 +9,13 @@ import (
 )
 
 type FileDiff struct {
-	OldPath string `json:"oldPath"`
-	NewPath string `json:"newPath"`
-	Status  string `json:"status"`
-	Binary  bool   `json:"binary"`
-	Hunks   []Hunk `json:"hunks"`
+	OldPath   string `json:"oldPath"`
+	NewPath   string `json:"newPath"`
+	Status    string `json:"status"`
+	Binary    bool   `json:"binary"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Hunks     []Hunk `json:"hunks"`
 }
 
 type Hunk struct {
@@ -83,10 +85,12 @@ func ParseUnifiedDiff(input string) ([]FileDiff, error) {
 			switch {
 			case strings.HasPrefix(line, "+"):
 				diffLine.Kind = "add"
+				file.Additions++
 				diffLine.NewLine = intPointer(newLine)
 				newLine++
 			case strings.HasPrefix(line, "-"):
 				diffLine.Kind = "delete"
+				file.Deletions++
 				diffLine.OldLine = intPointer(oldLine)
 				oldLine++
 			case strings.HasPrefix(line, " "):

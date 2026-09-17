@@ -31,6 +31,9 @@ Binary files /dev/null and b/image.png differ
 	if file.Status != "renamed" || file.OldPath != "old name.txt" || file.NewPath != "new name.txt" {
 		t.Fatalf("unexpected rename: %#v", file)
 	}
+	if file.Additions != 2 || file.Deletions != 1 {
+		t.Fatalf("unexpected file statistics: +%d -%d", file.Additions, file.Deletions)
+	}
 	lines := file.Hunks[0].Lines
 	assertLine(t, lines[0], "context", 1, 1)
 	assertLine(t, lines[1], "delete", 2, 0)

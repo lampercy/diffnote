@@ -51,6 +51,9 @@ func TestRepositoryReadsBranchesCommitsAndDiff(t *testing.T) {
 	if len(commits) != 2 || commits[0].Subject != "change message" {
 		t.Fatalf("unexpected commits: %#v", commits)
 	}
+	if commits[0].FilesChanged != 1 || commits[0].Additions != 2 || commits[0].Deletions != 1 {
+		t.Fatalf("unexpected commit statistics: %#v", commits[0])
+	}
 	count, err := repo.CommitCount("main")
 	if err != nil || count != 2 {
 		t.Fatalf("commit count = %d, %v; want 2", count, err)
@@ -74,6 +77,9 @@ func TestRepositoryReadsBranchesCommitsAndDiff(t *testing.T) {
 	}
 	if detail.PatchID == "" || len(detail.Files) != 1 || detail.Files[0].NewPath != "message.txt" {
 		t.Fatalf("unexpected commit detail: %#v", detail)
+	}
+	if detail.FilesChanged != 1 || detail.Additions != 2 || detail.Deletions != 1 {
+		t.Fatalf("unexpected commit detail statistics: %#v", detail.Commit)
 	}
 	lines := detail.Files[0].Hunks[0].Lines
 	if len(lines) < 4 {
