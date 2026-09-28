@@ -400,6 +400,7 @@ function renderDiff(focusCommentID = "") {
     elements.diffRoot.append(emptyState("No commit selected", "Select a commit to start reviewing."));
     return;
   }
+  if (state.commit.body) elements.diffRoot.append(renderDescription(state.commit.body));
   if (!state.commit.files?.length) {
     if (state.orphans.length) elements.diffRoot.append(renderOrphans());
     elements.diffRoot.append(emptyState("No textual changes", "This commit has no diff to display."));
@@ -415,6 +416,18 @@ function renderDiff(focusCommentID = "") {
   if (focusCommentID) {
     requestAnimationFrame(() => document.querySelector(`[data-comment-id="${CSS.escape(focusCommentID)}"] textarea`)?.focus());
   }
+}
+
+function renderDescription(body) {
+  const description = document.createElement("details");
+  description.className = "commit-description";
+  const summary = document.createElement("summary");
+  summary.textContent = "Commit description";
+  const content = document.createElement("div");
+  content.className = "commit-description-content";
+  content.textContent = body;
+  description.append(summary, content);
+  return description;
 }
 
 function renderFile(file) {

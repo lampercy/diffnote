@@ -95,6 +95,10 @@ kbd { color: #d0d7de; background: rgba(0,0,0,.18); border-radius: 4px; font-size
 
 .status-banner { margin: 16px 24px 0; padding: 10px 14px; border: 1px solid #54aeff66; border-radius: 7px; background: var(--selected); color: #0550ae; font-size: 13px; }
 .diff-root { padding: 18px 24px 80px; }
+.commit-description { margin: 0 0 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+.commit-description summary { padding: 11px 14px; cursor: pointer; font-size: 14px; font-weight: 600; }
+.commit-description summary:hover { background: var(--bg); }
+.commit-description-content { border-top: 1px solid var(--border); padding: 14px; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty-state { display: grid; place-items: center; min-height: 55vh; color: var(--muted); text-align: center; }
 .empty-state strong { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
 
