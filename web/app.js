@@ -10,8 +10,9 @@ const defaultSettings = {
   collapseViewed: true,
 };
 
-const virtualBlockLines = 100;
+const virtualBlockLines = 25;
 const virtualOverscan = 800;
+const maxHighlightedLineLength = 2_000;
 
 const state = {
   repository: null,
@@ -757,6 +758,10 @@ function nextAnchorRow(row) {
 }
 
 function appendHighlightedCode(element, source, path) {
+  if (source.length > maxHighlightedLineLength) {
+    element.textContent = source;
+    return;
+  }
   const hashComments = /\.(py|rb|sh|ya?ml|toml)$/i.test(path);
   const pattern = hashComments
     ? /(#.*$|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:async|await|break|case|catch|class|const|continue|def|default|defer|do|else|enum|export|false|finally|for|from|func|function|go|if|import|in|interface|let|map|match|new|nil|null|package|pass|private|public|range|return|select|struct|switch|throw|true|try|type|var|while|yield)\b|\b\d+(?:\.\d+)?\b)/g
