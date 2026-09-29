@@ -523,7 +523,8 @@ function renderVirtualDiff(files) {
     }
   }
   const estimate = Math.max(state.settings.lineHeight * virtualBlockLines + 52, 220);
-  state.virtualDiff = { blocks, heights: Array(blocks.length).fill(estimate), start: 0, end: 0, container: null, scheduled: false };
+  const heights = Array(blocks.length).fill(estimate);
+  state.virtualDiff = { blocks, heights, heightIndex: createHeightIndex(heights), start: 0, end: 0, container: null, scheduled: false };
   const container = document.createElement("div");
   container.className = "virtual-diff";
   state.virtualDiff.container = container;
@@ -538,12 +539,9 @@ function updateVirtualDiff() {
   const containerTop = virtual.container.getBoundingClientRect().top - elements.reviewPane.getBoundingClientRect().top + elements.reviewPane.scrollTop;
   const viewportStart = Math.max(0, elements.reviewPane.scrollTop - containerTop - virtualOverscan);
   const viewportEnd = elements.reviewPane.scrollTop - containerTop + elements.reviewPane.clientHeight + virtualOverscan;
-  let offset = 0;
-  let start = 0;
-  while (start < virtual.blocks.length && offset + virtual.heights[start] < viewportStart) offset += virtual.heights[start++];
-  let end = start;
-  let visibleEnd = offset;
-  while (end < virtual.blocks.length && visibleEnd < viewportEnd) visibleEnd += virtual.heights[end++];
+  const start = virtual.heightIndex.find(viewportStart);
+  const end = Math.min(virtual.blocks.length, virtual.heightIndex.find(viewportEnd) + 1);
+  const offset = virtual.heightIndex.sum(start);
   if (start === virtual.start && end === virtual.end && virtual.container.childElementCount) return;
   virtual.start = start;
   virtual.end = end;
@@ -555,7 +553,7 @@ function updateVirtualDiff() {
   for (let index = start; index < end; index++) fragment.append(renderVirtualBlock(virtual.blocks[index], index));
   const bottom = document.createElement("div");
   bottom.className = "virtual-spacer";
-  bottom.style.height = `${virtual.heights.slice(end).reduce((sum, height) => sum + height, 0)}px`;
+  bottom.style.height = `${virtual.heightIndex.total() - virtual.heightIndex.sum(end)}px`;
   fragment.append(bottom);
   virtual.container.replaceChildren(fragment);
 }
@@ -679,10 +677,43 @@ function observeVirtualBlock(section, index) {
     if (!difference) return;
     const aboveViewport = section.getBoundingClientRect().top < elements.reviewPane.getBoundingClientRect().top;
     virtual.heights[index] = nextHeight;
+    virtual.heightIndex.add(index, difference);
     if (aboveViewport) elements.reviewPane.scrollTop += difference;
     scheduleVirtualDiff();
   });
   observer.observe(section);
+}
+
+function createHeightIndex(heights) {
+  const tree = Array(heights.length + 1).fill(0);
+  const index = {
+    add(position, difference) {
+      for (let current = position + 1; current < tree.length; current += current & -current) tree[current] += difference;
+    },
+    sum(end) {
+      let total = 0;
+      for (let current = end; current > 0; current -= current & -current) total += tree[current];
+      return total;
+    },
+    total() {
+      return this.sum(heights.length);
+    },
+    find(offset) {
+      let position = 0;
+      let bit = 1;
+      while (bit < tree.length) bit <<= 1;
+      for (bit >>= 1; bit; bit >>= 1) {
+        const next = position + bit;
+        if (next < tree.length && tree[next] <= offset) {
+          position = next;
+          offset -= tree[next];
+        }
+      }
+      return position;
+    },
+  };
+  for (let position = 0; position < heights.length; position++) index.add(position, heights[position]);
+  return index;
 }
 
 function scheduleVirtualDiff() {
