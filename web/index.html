@@ -10,41 +10,56 @@
 </head>
 <body>
   <div id="app">
-    <aside class="sidebar">
-      <header class="brand">
+    <header class="app-toolbar">
+      <div class="brand">
         <div class="brand-mark">D</div>
         <div>
           <strong>DiffNote</strong>
           <span id="repo-name">Loading repository...</span>
         </div>
-        <button id="open-settings" class="sidebar-settings" type="button" aria-label="Open settings">Settings</button>
-      </header>
-      <section class="project-section">
+      </div>
+      <section class="toolbar-field project-section">
         <label for="project-select">Project</label>
         <div class="project-picker">
           <select id="project-select" aria-label="Select project"></select>
           <button id="add-project" type="button" aria-label="Add project">+</button>
         </div>
       </section>
-      <section class="branch-section">
+      <section class="toolbar-field branch-section">
         <label for="branch-source">Source</label>
         <select id="branch-source" aria-label="Select local or remote source"></select>
+      </section>
+      <section class="toolbar-field branch-section branch-search-field">
         <label for="branch-search">Search branches</label>
         <input id="branch-search" type="search" placeholder="Filter branch names" aria-label="Search branches" autocomplete="off">
+      </section>
+      <section class="toolbar-field branch-section">
         <label for="branch-select">Branch</label>
         <select id="branch-select" aria-label="Select branch"></select>
       </section>
-      <div class="list-heading">
-        <span>Commits</span>
-        <span id="commit-count"></span>
+      <button id="open-settings" class="sidebar-settings" type="button" aria-label="Open settings">Settings</button>
+    </header>
+    <div class="app-body">
+      <aside class="sidebar">
+       <div class="list-heading">
+         <span>Commits</span>
+         <span id="commit-count"></span>
       </div>
       <div class="commit-search-wrap">
         <input id="commit-search" type="search" placeholder="Search commit messages" aria-label="Search commit messages">
-      </div>
-      <nav id="commit-list" class="commit-list" aria-label="Commit history"></nav>
-    </aside>
+        </div>
+        <nav id="commit-list" class="commit-list" aria-label="Commit history"></nav>
+        <div id="commit-file-resizer" class="split-resizer" role="separator" aria-label="Resize commit list" aria-orientation="horizontal"></div>
+        <section class="file-browser">
+          <div class="list-heading"><span>Files</span><span id="file-count"></span></div>
+          <div class="commit-search-wrap">
+            <input id="file-search" type="search" placeholder="Search changed files" aria-label="Search changed files" autocomplete="off">
+          </div>
+          <nav id="file-list" class="file-list" aria-label="Files changed in selected commit"></nav>
+        </section>
+      </aside>
 
-    <main class="review-pane">
+      <main class="review-pane">
       <header class="review-toolbar">
         <div id="commit-heading" class="commit-heading">
           <h1>Select a commit</h1>
@@ -60,7 +75,8 @@
       </header>
       <div id="status-banner" class="status-banner" hidden></div>
       <section id="diff-root" class="diff-root"></section>
-    </main>
+      </main>
+    </div>
   </div>
   <dialog id="settings-dialog" class="settings-dialog">
     <form id="settings-form" method="dialog">

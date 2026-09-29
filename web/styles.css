@@ -29,7 +29,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 button, select, textarea { font: inherit; }
 
-#app { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100vh; min-height: 0; }
+#app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; min-height: 0; }
+.app-body { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 0; }
+.app-toolbar { display: flex; align-items: end; gap: 12px; min-width: 0; padding: 10px 16px; color: #e6edf3; background: #0d1117; border-bottom: 1px solid #30363d; }
 
 .sidebar {
   background: #0d1117;
@@ -41,16 +43,18 @@ button, select, textarea { font: inherit; }
   min-height: 0;
 }
 
-.brand { display: flex; align-items: center; gap: 12px; padding: 18px; border-bottom: 1px solid #30363d; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 190px; }
 .brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: #238636; font: 700 18px ui-monospace, monospace; }
 .brand strong, .brand span { display: block; }
 .brand span { color: #8b949e; font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 230px; }
 .sidebar-settings { margin-left: auto; color: #c9d1d9; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 12px; font-weight: 600; }
 .sidebar-settings:hover { background: #21262d; }
 
-.project-section, .branch-section { padding: 14px 16px; border-bottom: 1px solid #30363d; }
-.project-section label, .branch-section label { display: block; color: #8b949e; font-size: 12px; font-weight: 600; letter-spacing: .08em; margin: 10px 0 7px; text-transform: uppercase; }
-.project-section label:first-child, .branch-section label:first-child { margin-top: 0; }
+.toolbar-field { min-width: 0; }
+.project-section, .branch-section { padding: 0; }
+.project-section label, .branch-section label { display: block; color: #8b949e; font-size: 10px; font-weight: 600; letter-spacing: .08em; margin: 0 0 5px; text-transform: uppercase; }
+.branch-section { width: 155px; }
+.branch-search-field { width: 190px; }
 .branch-section select, .branch-section input { width: 100%; color: #e6edf3; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; }
 .project-picker { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 7px; }
 .project-picker select, .project-picker button { min-width: 0; color: #e6edf3; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; }
@@ -59,7 +63,21 @@ button, select, textarea { font: inherit; }
 .list-heading { display: flex; justify-content: space-between; padding: 13px 16px 8px; color: #8b949e; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
 .commit-search-wrap { padding: 0 12px 9px; }
 .commit-search-wrap input { width: 100%; color: #e6edf3; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
-.commit-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 18px; }
+.commit-list { flex: 0 0 var(--commit-list-height); min-height: 100px; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 18px; }
+.split-resizer { position: relative; flex: none; height: 5px; background: #30363d; cursor: row-resize; }
+.split-resizer::after { content: ""; position: absolute; inset: -3px 0; }
+.split-resizer:hover, body.resizing-split .split-resizer { background: #58a6ff; }
+.file-browser { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 100px; color: #e6edf3; background: #0d1117; }
+.file-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 14px; }
+.file-tree-directory { display: block; color: #d0d7de; font-size: 14px; }
+.file-tree-directory > summary { cursor: pointer; padding: 5px 0; }
+.file-tree-directory > summary::marker { color: #8b949e; }
+.file-tree-directory > summary::before { content: "▣"; margin-right: 6px; color: #d29922; }
+.file-tree-children { padding-left: 13px; border-left: 1px solid #30363d; }
+.file-tree-file { display: block; width: 100%; overflow: hidden; border: 0; color: #c9d1d9; background: transparent; padding: 5px 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font: 13px var(--code-font); }
+.file-tree-file::before { content: "▤"; margin-right: 7px; color: #79c0ff; font-family: sans-serif; }
+.file-tree-file:hover { color: #79c0ff; background: #1f6feb26; }
+.file-tree-empty { padding: 10px 4px; color: #8b949e; font-size: 13px; }
 .commit-card { position: relative; display: grid; grid-template-columns: minmax(22px, max-content) minmax(0, 1fr); gap: 8px; width: 100%; border: 0; border-radius: 7px; color: #e6edf3; background: transparent; padding: 9px 8px; text-align: left; cursor: pointer; }
 .commit-card:hover { background: #161b22; }
 .commit-card.selected { background: #1f6feb26; box-shadow: inset 2px 0 #58a6ff; }
@@ -99,6 +117,9 @@ kbd { color: #d0d7de; background: rgba(0,0,0,.18); border-radius: 4px; font-size
 .commit-description summary { padding: 11px 14px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .commit-description summary:hover { background: var(--bg); }
 .commit-description-content { border-top: 1px solid var(--border); padding: 14px; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.virtual-diff { min-height: 1px; }
+.virtual-spacer { height: 0; pointer-events: none; }
+.virtual-block { contain: layout style; }
 .empty-state { display: grid; place-items: center; min-height: 55vh; color: var(--muted); text-align: center; }
 .empty-state strong { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
 
@@ -175,8 +196,11 @@ kbd { color: #d0d7de; background: rgba(0,0,0,.18); border-radius: 4px; font-size
 
 @media (max-width: 800px) {
   body { overflow: auto; }
-  #app { grid-template-columns: 1fr; height: auto; min-height: 100%; }
+  #app { grid-template-rows: auto auto; height: auto; min-height: 100%; }
+  .app-toolbar, .app-body { grid-template-columns: 1fr; }
+  .app-toolbar { flex-wrap: wrap; align-items: end; }
   .sidebar { max-height: 42vh; }
+  .file-browser { max-height: 32vh; }
   .review-toolbar { top: 0; padding: 12px; }
   .diff-root { padding: 12px 8px 60px; }
   .line-number { width: 30px; padding-right: 4px !important; }

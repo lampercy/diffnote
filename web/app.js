@@ -5,9 +5,13 @@ const defaultSettings = {
   theme: "system",
   wrapLines: true,
   sidebarWidth: 330,
+  commitListHeight: 360,
   contextLines: 3,
   collapseViewed: true,
 };
+
+const virtualBlockLines = 100;
+const virtualOverscan = 800;
 
 const state = {
   repository: null,
@@ -19,6 +23,8 @@ const state = {
   loadingMoreCommits: false,
   commitTip: "",
   commit: null,
+  files: [],
+  fileSearch: "",
   comments: [],
   orphans: [],
   selectedRef: "",
@@ -34,6 +40,7 @@ const state = {
   revisions: new Map(),
   bases: new Map(),
   contextLines: 3,
+  virtualDiff: null,
   dirty: false,
   saveGeneration: 0,
   viewed: new Set(),
@@ -51,6 +58,10 @@ const elements = {
   commitSearch: document.querySelector("#commit-search"),
   commitCount: document.querySelector("#commit-count"),
   commitList: document.querySelector("#commit-list"),
+  fileSearch: document.querySelector("#file-search"),
+  fileCount: document.querySelector("#file-count"),
+  fileList: document.querySelector("#file-list"),
+  commitFileResizer: document.querySelector("#commit-file-resizer"),
   reviewPane: document.querySelector(".review-pane"),
   commitHeading: document.querySelector("#commit-heading"),
   copyReview: document.querySelector("#copy-review"),
@@ -201,6 +212,8 @@ async function loadCommits() {
   const requestedSearch = state.commitSearch;
   elements.commitList.replaceChildren(loadingMessage("Loading commits..."));
   state.commit = null;
+  state.files = [];
+  renderFiles();
   state.comments = [];
   state.orphans = [];
   renderCommitHeading();
@@ -324,10 +337,9 @@ async function loadMoreCommits() {
     for (const commit of page.commits || []) {
       if (known.has(commit.hash)) continue;
       state.commits.push(commit);
-      elements.commitList.append(renderCommitCard(commit));
     }
     state.commitTotal = page.total || state.commitTotal;
-    elements.commitCount.textContent = state.commitTotal;
+    renderCommitList();
   } catch (error) {
     showToast(`Unable to load more commits: ${error.message}`);
   } finally {
@@ -343,6 +355,7 @@ async function selectCommit(hash) {
   }
   const sequence = ++state.loadSequence;
   state.contextLines = state.settings.contextLines;
+  state.virtualDiff = null;
   document.querySelectorAll(".commit-card").forEach((card) => {
     card.classList.toggle("selected", card.dataset.hash === hash);
   });
@@ -362,6 +375,7 @@ async function selectCommit(hash) {
       state.contextLines = 100;
     }
     state.commit = commit;
+    state.files = commit.files.map((file) => file.status === "deleted" ? file.oldPath : file.newPath);
     state.comments = review.comments || [];
     state.orphans = review.orphans || [];
     state.revisions.set(hash, review.revision);
@@ -372,10 +386,74 @@ async function selectCommit(hash) {
       showBanner(`Recovered comments from the same patch before a rebase.${suffix}`);
     }
     renderCommitHeading();
+    renderFiles();
     renderDiff();
   } catch (error) {
     if (sequence === state.loadSequence) showFatal(error);
   }
+}
+
+function renderFiles() {
+  elements.fileList.replaceChildren();
+  const query = state.fileSearch.trim().toLowerCase();
+  const files = state.files.filter((path) => path.toLowerCase().includes(query));
+  elements.fileCount.textContent = state.files.length ? files.length : "";
+  if (!state.commit) return;
+  if (!files.length) {
+    const empty = document.createElement("div");
+    empty.className = "file-tree-empty";
+    empty.textContent = query ? "No matching files" : "No files";
+    elements.fileList.append(empty);
+    return;
+  }
+  const tree = new Map();
+  for (const path of files) {
+    let children = tree;
+    for (const part of path.split("/")) {
+      if (!children.has(part)) children.set(part, new Map());
+      children = children.get(part);
+    }
+    children.set("", path);
+  }
+  appendFileTree(elements.fileList, tree, "");
+}
+
+function appendFileTree(parent, tree, prefix) {
+  for (const [name, children] of [...tree.entries()].filter(([name]) => name).sort(([a], [b]) => a.localeCompare(b))) {
+    const path = `${prefix}${name}`;
+    const isFile = children.has("");
+    const item = document.createElement(isFile ? "button" : "details");
+    item.className = isFile ? "file-tree-file" : "file-tree-directory";
+    if (isFile) {
+      item.type = "button";
+      item.textContent = name;
+      item.title = children.get("");
+      item.addEventListener("click", () => scrollToFile(children.get("")));
+    } else {
+      item.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = name;
+      const nested = document.createElement("div");
+      nested.className = "file-tree-children";
+      appendFileTree(nested, children, `${path}/`);
+      item.append(summary, nested);
+    }
+    parent.append(item);
+  }
+}
+
+function scrollToFile(path) {
+  const virtual = state.virtualDiff;
+  if (!virtual) return;
+  const index = virtual.blocks.findIndex((block) => (block.file.status === "deleted" ? block.file.oldPath : block.file.newPath) === path);
+  if (index < 0) {
+    showToast("This file has no textual diff in the selected commit.");
+    return;
+  }
+  const offset = virtual.heights.slice(0, index).reduce((sum, height) => sum + height, 0);
+  const containerTop = virtual.container.getBoundingClientRect().top - elements.reviewPane.getBoundingClientRect().top + elements.reviewPane.scrollTop;
+  elements.reviewPane.scrollTop = containerTop + offset;
+  scheduleVirtualDiff();
 }
 
 function renderCommitHeading() {
@@ -409,9 +487,7 @@ function renderDiff(focusCommentID = "") {
 
   if (state.orphans.length) elements.diffRoot.append(renderOrphans());
 
-  for (const file of state.commit.files) {
-    elements.diffRoot.append(renderFile(file));
-  }
+  renderVirtualDiff(state.commit.files);
   updateCopyButton();
   if (focusCommentID) {
     requestAnimationFrame(() => document.querySelector(`[data-comment-id="${CSS.escape(focusCommentID)}"] textarea`)?.focus());
@@ -430,119 +506,185 @@ function renderDescription(body) {
   return description;
 }
 
-function renderFile(file) {
+function renderVirtualDiff(files) {
+  const blocks = [];
+  for (const file of files) {
+    if (file.binary || !file.hunks.length) {
+      blocks.push({ file, binary: true, lines: [] });
+      continue;
+    }
+    for (const hunk of file.hunks) {
+      for (let start = 0; start < hunk.lines.length; start += virtualBlockLines) {
+        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines) });
+      }
+    }
+  }
+  const estimate = Math.max(state.settings.lineHeight * virtualBlockLines + 52, 220);
+  state.virtualDiff = { blocks, heights: Array(blocks.length).fill(estimate), start: 0, end: 0, container: null, scheduled: false };
+  const container = document.createElement("div");
+  container.className = "virtual-diff";
+  state.virtualDiff.container = container;
+  elements.diffRoot.append(container);
+  updateVirtualDiff();
+}
+
+function updateVirtualDiff() {
+  const virtual = state.virtualDiff;
+  if (!virtual?.container || !state.commit) return;
+  virtual.scheduled = false;
+  const containerTop = virtual.container.getBoundingClientRect().top - elements.reviewPane.getBoundingClientRect().top + elements.reviewPane.scrollTop;
+  const viewportStart = Math.max(0, elements.reviewPane.scrollTop - containerTop - virtualOverscan);
+  const viewportEnd = elements.reviewPane.scrollTop - containerTop + elements.reviewPane.clientHeight + virtualOverscan;
+  let offset = 0;
+  let start = 0;
+  while (start < virtual.blocks.length && offset + virtual.heights[start] < viewportStart) offset += virtual.heights[start++];
+  let end = start;
+  let visibleEnd = offset;
+  while (end < virtual.blocks.length && visibleEnd < viewportEnd) visibleEnd += virtual.heights[end++];
+  if (start === virtual.start && end === virtual.end && virtual.container.childElementCount) return;
+  virtual.start = start;
+  virtual.end = end;
+  const fragment = document.createDocumentFragment();
+  const top = document.createElement("div");
+  top.className = "virtual-spacer";
+  top.style.height = `${offset}px`;
+  fragment.append(top);
+  for (let index = start; index < end; index++) fragment.append(renderVirtualBlock(virtual.blocks[index], index));
+  const bottom = document.createElement("div");
+  bottom.className = "virtual-spacer";
+  bottom.style.height = `${virtual.heights.slice(end).reduce((sum, height) => sum + height, 0)}px`;
+  fragment.append(bottom);
+  virtual.container.replaceChildren(fragment);
+}
+
+function renderVirtualBlock(block, index) {
   const section = document.createElement("section");
-  section.className = "file-diff";
-  const commitHash = state.commit.hash;
-  const projectID = state.projectID;
-  const viewedKey = fileViewKey(file);
-  section.classList.toggle("viewed", state.viewed.has(viewedKey));
+  section.className = "file-diff virtual-block";
+  section.dataset.virtualIndex = index;
+  section.classList.toggle("viewed", state.viewed.has(fileViewKey(block.file)));
   const header = document.createElement("header");
   header.className = "file-header";
   const status = document.createElement("span");
   status.className = "file-status";
-  status.textContent = file.status;
+  status.textContent = block.file.status;
   const name = document.createElement("span");
   name.className = "file-name";
-  name.textContent = file.status === "deleted" ? file.oldPath : file.newPath;
-  const stats = changeStats(null, file.additions, file.deletions);
-  const viewed = document.createElement("label");
-  viewed.className = "viewed-control";
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = state.viewed.has(viewedKey);
-  const viewedText = document.createElement("span");
-  viewedText.textContent = "Viewed";
-  viewed.append(checkbox, viewedText);
-  checkbox.addEventListener("change", () => {
-    const desired = checkbox.checked;
-    if (desired) state.viewed.add(viewedKey);
-    else state.viewed.delete(viewedKey);
-    section.classList.toggle("viewed", desired);
-    const chainKey = `${commitHash}\u0000${viewedKey}`;
-    const previous = state.viewedSaveChains.get(chainKey) || Promise.resolve();
-    const save = previous.catch(() => {}).then(() => api(`/api/viewed/${encodeURIComponent(commitHash)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-DiffNote-Project": projectID },
-        body: JSON.stringify({ fileKey: viewedKey, viewed: desired }),
-      }));
-    state.viewedSaveChains.set(chainKey, save);
-    void save.catch((error) => {
-      if (checkbox.checked !== desired) return;
-      checkbox.checked = !desired;
-      if (checkbox.checked) state.viewed.add(viewedKey);
-      else state.viewed.delete(viewedKey);
-      section.classList.toggle("viewed", checkbox.checked);
-      showToast(`Unable to update viewed file: ${error.message}`);
-    });
-  });
-  header.append(status, name, stats, viewed);
+  name.textContent = block.file.status === "deleted" ? block.file.oldPath : block.file.newPath;
+  header.append(status, name, changeStats(null, block.file.additions, block.file.deletions), renderViewedControl(block.file, section));
   section.append(header);
-
-  if (file.binary || !file.hunks.length) {
+  if (block.binary) {
     const note = document.createElement("div");
     note.className = "binary-note";
-    note.textContent = file.binary ? "Binary file changed" : "File metadata changed";
+    note.textContent = block.file.binary ? "Binary file changed" : "File metadata changed";
     section.append(note);
-    return section;
-  }
-
-  const table = document.createElement("table");
-  table.className = "diff-table";
-  const body = document.createElement("tbody");
-  for (const hunk of file.hunks) {
+  } else {
+    const table = document.createElement("table");
+    table.className = "diff-table";
+    const body = document.createElement("tbody");
     const hunkRow = document.createElement("tr");
     hunkRow.className = "hunk-row";
-    const cell = document.createElement("td");
-    cell.colSpan = 3;
-    const header = document.createElement("div");
-    header.className = "hunk-header";
-    const label = document.createElement("span");
-    label.textContent = hunk.header;
-    header.append(label);
+    const hunkCell = document.createElement("td");
+    hunkCell.colSpan = 3;
+    const hunkHeader = document.createElement("div");
+    hunkHeader.className = "hunk-header";
+    const hunkLabel = document.createElement("span");
+    hunkLabel.textContent = block.hunk.header;
+    hunkHeader.append(hunkLabel);
     if (state.contextLines < 100) {
       const expand = document.createElement("button");
       expand.type = "button";
       expand.className = "expand-context";
       expand.textContent = "Expand context";
       expand.addEventListener("click", (event) => expandContext(event.currentTarget));
-      header.prepend(expand);
+      hunkHeader.prepend(expand);
     }
-    cell.append(header);
-    hunkRow.append(cell);
+    hunkCell.append(hunkHeader);
+    hunkRow.append(hunkCell);
     body.append(hunkRow);
-
-    for (const line of hunk.lines) {
-      const anchor = lineAnchor(file, line);
-      const lineComments = anchor
-        ? state.comments.filter((comment) => sameAnchor(comment, anchor))
-        : [];
-      const row = document.createElement("tr");
-      row.className = `line-row ${line.kind}${lineComments.length ? " has-comment" : ""}`;
-      if (anchor) row.dataset.anchor = anchorKey(anchor);
-      row.append(lineNumberCell(line.oldLine), lineNumberCell(line.newLine));
-      const codeCell = document.createElement("td");
-      codeCell.className = "line-code";
-      const code = document.createElement("code");
-      appendHighlightedCode(code, line.content || " ", file.status === "deleted" ? file.oldPath : file.newPath);
-      codeCell.append(code);
-      if (anchor) {
-        const add = document.createElement("button");
-        add.type = "button";
-        add.className = "add-comment";
-        add.textContent = "+";
-        add.title = `Comment on ${anchor.side} line ${anchor.line}`;
-        add.addEventListener("click", () => addComment(anchor));
-        codeCell.append(add);
-      }
-      row.append(codeCell);
-      body.append(row);
-      for (const comment of lineComments) body.append(renderComment(comment));
-    }
+    for (const line of block.lines) appendDiffLine(body, block.file, line);
+    table.append(body);
+    section.append(table);
   }
-  table.append(body);
-  section.append(table);
+  observeVirtualBlock(section, index);
   return section;
+}
+
+function renderViewedControl(file, section) {
+  const viewedKey = fileViewKey(file);
+  const control = document.createElement("label");
+  control.className = "viewed-control";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.viewed.has(viewedKey);
+  control.append(checkbox, document.createTextNode("Viewed"));
+  checkbox.addEventListener("change", () => {
+    const viewed = checkbox.checked;
+    if (viewed) state.viewed.add(viewedKey);
+    else state.viewed.delete(viewedKey);
+    section.classList.toggle("viewed", viewed);
+    const chainKey = `${state.commit.hash}\u0000${viewedKey}`;
+    const previous = state.viewedSaveChains.get(chainKey) || Promise.resolve();
+    const save = previous.catch(() => {}).then(() => api(`/api/viewed/${encodeURIComponent(state.commit.hash)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-DiffNote-Project": state.projectID },
+      body: JSON.stringify({ fileKey: viewedKey, viewed }),
+    }));
+    state.viewedSaveChains.set(chainKey, save);
+    void save.catch((error) => showToast(`Unable to update viewed file: ${error.message}`));
+  });
+  return control;
+}
+
+function appendDiffLine(body, file, line) {
+  const anchor = lineAnchor(file, line);
+  const lineComments = anchor ? state.comments.filter((comment) => sameAnchor(comment, anchor)) : [];
+  const row = document.createElement("tr");
+  row.className = `line-row ${line.kind}${lineComments.length ? " has-comment" : ""}`;
+  if (anchor) row.dataset.anchor = anchorKey(anchor);
+  row.append(lineNumberCell(line.oldLine), lineNumberCell(line.newLine));
+  const codeCell = document.createElement("td");
+  codeCell.className = "line-code";
+  const code = document.createElement("code");
+  appendHighlightedCode(code, line.content || " ", file.status === "deleted" ? file.oldPath : file.newPath);
+  codeCell.append(code);
+  if (anchor) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "add-comment";
+    add.textContent = "+";
+    add.title = `Comment on ${anchor.side} line ${anchor.line}`;
+    add.addEventListener("click", () => addComment(anchor));
+    codeCell.append(add);
+  }
+  row.append(codeCell);
+  body.append(row);
+  for (const comment of lineComments) body.append(renderComment(comment));
+}
+
+function observeVirtualBlock(section, index) {
+  const observer = new ResizeObserver(() => {
+    if (!section.isConnected) {
+      observer.disconnect();
+      return;
+    }
+    const virtual = state.virtualDiff;
+    if (!virtual || virtual.blocks[index] == null) return;
+    const nextHeight = Math.ceil(section.getBoundingClientRect().height);
+    const difference = nextHeight - virtual.heights[index];
+    if (!difference) return;
+    const aboveViewport = section.getBoundingClientRect().top < elements.reviewPane.getBoundingClientRect().top;
+    virtual.heights[index] = nextHeight;
+    if (aboveViewport) elements.reviewPane.scrollTop += difference;
+    scheduleVirtualDiff();
+  });
+  observer.observe(section);
+}
+
+function scheduleVirtualDiff() {
+  const virtual = state.virtualDiff;
+  if (!virtual || virtual.scheduled) return;
+  virtual.scheduled = true;
+  requestAnimationFrame(updateVirtualDiff);
 }
 
 function changeStats(files, additions, deletions) {
@@ -1013,8 +1155,35 @@ function applySettings() {
   root.style.setProperty("--code-size", `${state.settings.fontSize}px`);
   root.style.setProperty("--code-line-height", `${state.settings.lineHeight}px`);
   root.style.setProperty("--sidebar-width", `${state.settings.sidebarWidth}px`);
+  root.style.setProperty("--commit-list-height", `${state.settings.commitListHeight}px`);
   root.classList.toggle("no-wrap", !state.settings.wrapLines);
   root.classList.toggle("collapse-viewed", state.settings.collapseViewed);
+}
+
+function enableSplitResize(resizer, setting, minimum, maximum) {
+  resizer.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = state.settings[setting];
+    document.body.classList.add("resizing-split");
+    const move = (moveEvent) => {
+      const height = Math.max(minimum, Math.min(maximum, startHeight + moveEvent.clientY - startY));
+      state.settings = { ...state.settings, [setting]: height };
+      applySettings();
+    };
+    const finish = () => {
+      document.body.classList.remove("resizing-split");
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      void api("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state.settings),
+      }).catch((error) => showToast(`Unable to save layout: ${error.message}`));
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish, { once: true });
+  });
 }
 
 function fillSettingsForm(settings) {
@@ -1036,6 +1205,7 @@ function readSettingsForm() {
     theme: form.get("theme"),
     wrapLines: form.get("wrapLines") === "on",
     sidebarWidth: Number(form.get("sidebarWidth")),
+    commitListHeight: state.settings.commitListHeight,
     contextLines: Number(form.get("contextLines")),
     collapseViewed: form.get("collapseViewed") === "on",
   };
@@ -1180,6 +1350,12 @@ elements.commitList.addEventListener("scroll", () => {
     void loadMoreCommits();
   }
 });
+elements.reviewPane.addEventListener("scroll", scheduleVirtualDiff, { passive: true });
+elements.fileSearch.addEventListener("input", () => {
+  state.fileSearch = elements.fileSearch.value;
+  renderFiles();
+});
+enableSplitResize(elements.commitFileResizer, "commitListHeight", 160, 800);
 elements.openSettings.addEventListener("click", () => {
   fillSettingsForm(state.settings);
   elements.settingsDialog.showModal();

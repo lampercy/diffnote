@@ -82,8 +82,9 @@ type appSettings struct {
 	LineHeight     int    `json:"lineHeight"`
 	Theme          string `json:"theme"`
 	WrapLines      bool   `json:"wrapLines"`
-	SidebarWidth   int    `json:"sidebarWidth"`
-	ContextLines   int    `json:"contextLines"`
+	SidebarWidth     int `json:"sidebarWidth"`
+	CommitListHeight int `json:"commitListHeight"`
+	ContextLines     int `json:"contextLines"`
 	CollapseViewed bool   `json:"collapseViewed"`
 }
 
@@ -362,7 +363,8 @@ func validSettings(settings appSettings) bool {
 	validTheme := settings.Theme == "system" || settings.Theme == "light" || settings.Theme == "dark"
 	validContext := settings.ContextLines == 0 || settings.ContextLines == 3 || settings.ContextLines == 10 || settings.ContextLines == 20 || settings.ContextLines == 50
 	return validFont && validTheme && validContext && settings.FontSize >= 12 && settings.FontSize <= 20 &&
-		settings.LineHeight >= 18 && settings.LineHeight <= 34 && settings.SidebarWidth >= 260 && settings.SidebarWidth <= 500
+		settings.LineHeight >= 18 && settings.LineHeight <= 34 && settings.SidebarWidth >= 260 && settings.SidebarWidth <= 500 &&
+		settings.CommitListHeight >= 160 && settings.CommitListHeight <= 800
 }
 
 func (s *server) handleViewedFiles(w http.ResponseWriter, request *http.Request) {

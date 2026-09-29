@@ -114,7 +114,7 @@ func TestReviewAPI(t *testing.T) {
 	if viewed.Code != http.StatusOK || !bytes.Contains(viewed.Body.Bytes(), []byte("hello.txt")) {
 		t.Fatalf("viewed files returned %d: %s", viewed.Code, viewed.Body.String())
 	}
-	settingsPayload := []byte(`{"font":"github","fontSize":15,"lineHeight":24,"theme":"dark","wrapLines":true,"sidebarWidth":350,"contextLines":10,"collapseViewed":true}`)
+	settingsPayload := []byte(`{"font":"github","fontSize":15,"lineHeight":24,"theme":"dark","wrapLines":true,"sidebarWidth":350,"commitListHeight":360,"contextLines":10,"collapseViewed":true}`)
 	settingsSave := serve(t, app, http.MethodPut, "/api/settings", settingsPayload, "")
 	if settingsSave.Code != http.StatusNoContent {
 		t.Fatalf("settings save returned %d: %s", settingsSave.Code, settingsSave.Body.String())
