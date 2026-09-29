@@ -510,12 +510,14 @@ function renderVirtualDiff(files) {
   const blocks = [];
   for (const file of files) {
     if (file.binary || !file.hunks.length) {
-      blocks.push({ file, binary: true, lines: [] });
+      blocks.push({ file, binary: true, lines: [], showHeader: true });
       continue;
     }
+    let showHeader = true;
     for (const hunk of file.hunks) {
       for (let start = 0; start < hunk.lines.length; start += virtualBlockLines) {
-        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines) });
+        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines), showHeader });
+        showHeader = false;
       }
     }
   }
@@ -562,16 +564,18 @@ function renderVirtualBlock(block, index) {
   section.className = "file-diff virtual-block";
   section.dataset.virtualIndex = index;
   section.classList.toggle("viewed", state.viewed.has(fileViewKey(block.file)));
-  const header = document.createElement("header");
-  header.className = "file-header";
-  const status = document.createElement("span");
-  status.className = "file-status";
-  status.textContent = block.file.status;
-  const name = document.createElement("span");
-  name.className = "file-name";
-  name.textContent = block.file.status === "deleted" ? block.file.oldPath : block.file.newPath;
-  header.append(status, name, changeStats(null, block.file.additions, block.file.deletions), renderViewedControl(block.file, section));
-  section.append(header);
+  if (block.showHeader) {
+    const header = document.createElement("header");
+    header.className = "file-header";
+    const status = document.createElement("span");
+    status.className = "file-status";
+    status.textContent = block.file.status;
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = block.file.status === "deleted" ? block.file.oldPath : block.file.newPath;
+    header.append(status, name, changeStats(null, block.file.additions, block.file.deletions), renderViewedControl(block.file, section));
+    section.append(header);
+  }
   if (block.binary) {
     const note = document.createElement("div");
     note.className = "binary-note";
@@ -801,6 +805,8 @@ function hasVisibleAnchor(comment, files) {
 }
 
 function addComment(anchor) {
+  const key = anchorKey(anchor);
+  const row = elements.diffRoot.querySelector(`[data-anchor="${CSS.escape(key)}"]`);
   const comment = {
     id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
     commitHash: state.commit.hash,
@@ -811,7 +817,14 @@ function addComment(anchor) {
     updatedAt: new Date().toISOString(),
   };
   state.comments.push(comment);
-  renderDiff(comment.id);
+  if (!row) {
+    renderDiff(comment.id);
+    return;
+  }
+  row.classList.add("has-comment");
+  const commentRow = renderComment(comment);
+  row.after(commentRow);
+  requestAnimationFrame(() => commentRow.querySelector("textarea")?.focus());
 }
 
 function renderComment(comment) {
