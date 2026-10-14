@@ -159,7 +159,7 @@ func TestWorkingReviewAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reviewStore.Close()
-	app := (&server{repo: repo, store: reviewStore, gitSlots: make(chan struct{}, 2)}).routes("example.com")
+	app := (&server{repo: repo, store: reviewStore, web: http.FileServer(http.FS(webFiles)), gitSlots: make(chan struct{}, 2)}).routes("example.com")
 	history := serve(t, app, http.MethodGet, "/api/commits?ref=main", nil, "")
 	var page commitsResponse
 	if err := json.Unmarshal(history.Body.Bytes(), &page); err != nil || page.Working {
