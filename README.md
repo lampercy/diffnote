@@ -11,6 +11,8 @@ DiffNote opens a loopback web server. Add and select local Git repositories from
 
 Use the **Copy review** button or `Ctrl+Shift+Enter` (`Cmd+Shift+Enter` on macOS) to copy all comments for the selected commit as Markdown.
 
+When the current branch has tracked uncommitted changes, **Uncommitted tracked changes** appears at the top of the commit list. It includes staged and unstaged edits but excludes untracked files. Select it to leave review comments; reselect it to refresh the diff after editing files. Comments whose lines have changed remain available as unattached comments rather than moving to another line.
+
 ## Development
 
 ```bash

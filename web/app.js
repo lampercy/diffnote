@@ -13,6 +13,7 @@ const defaultSettings = {
 const virtualBlockLines = 25;
 const virtualOverscan = 800;
 const maxHighlightedLineLength = 2_000;
+const workingID = "working";
 
 const state = {
   repository: null,
@@ -24,6 +25,7 @@ const state = {
   loadingMoreCommits: false,
   commitTip: "",
   commit: null,
+  hasWorkingChanges: false,
   files: [],
   fileSearch: "",
   comments: [],
@@ -213,6 +215,7 @@ async function loadCommits() {
   const requestedSearch = state.commitSearch;
   elements.commitList.replaceChildren(loadingMessage("Loading commits..."));
   state.commit = null;
+  state.hasWorkingChanges = false;
   state.files = [];
   renderFiles();
   state.comments = [];
@@ -224,11 +227,12 @@ async function loadCommits() {
     const page = await api(`/api/commits?ref=${encodeURIComponent(requestedRef)}&offset=0&search=${encodeURIComponent(requestedSearch)}`);
     if (sequence !== state.historySequence || requestedRef !== state.selectedRef || requestedSearch !== state.commitSearch) return true;
     state.commits = page.commits || [];
+    state.hasWorkingChanges = Boolean(page.working);
     state.commitTotal = page.total || 0;
     state.commitTip = page.tip || "";
     state.loadedRef = requestedRef;
     renderCommitList();
-    if (state.commits.length) await selectCommit(state.commits[0].hash);
+    if (state.hasWorkingChanges || state.commits.length) await selectCommit(state.hasWorkingChanges ? workingID : state.commits[0].hash);
   } catch (error) {
     if (sequence !== state.historySequence || requestedRef !== state.selectedRef || requestedSearch !== state.commitSearch) return true;
     elements.commitList.replaceChildren(errorMessage(error));
@@ -238,11 +242,23 @@ async function loadCommits() {
 }
 
 function renderCommitList() {
-  elements.commitCount.textContent = state.commitTotal;
+  elements.commitCount.textContent = state.commitTotal + Number(state.hasWorkingChanges);
   elements.commitList.replaceChildren();
+  if (state.hasWorkingChanges) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "commit-card working-card";
+    button.dataset.hash = workingID;
+    button.classList.toggle("selected", state.commit?.hash === workingID);
+    button.textContent = "●  Uncommitted tracked changes";
+    button.addEventListener("click", () => selectCommit(workingID));
+    elements.commitList.append(button);
+  }
   const graph = commitGraph(state.commits);
   for (const commit of state.commits) {
-    elements.commitList.append(renderCommitCard(commit, graph.get(commit.hash)));
+    const card = renderCommitCard(commit, graph.get(commit.hash));
+    card.classList.toggle("selected", state.commit?.hash === commit.hash);
+    elements.commitList.append(card);
   }
 }
 
@@ -355,6 +371,9 @@ async function selectCommit(hash) {
     return;
   }
   const sequence = ++state.loadSequence;
+  state.commit = null;
+  state.files = [];
+  renderFiles();
   state.contextLines = state.settings.contextLines;
   state.virtualDiff = null;
   document.querySelectorAll(".commit-card").forEach((card) => {
@@ -466,7 +485,7 @@ function renderCommitHeading() {
     detail.textContent = "Choose a branch and commit from the left.";
   } else {
     title.textContent = state.commit.subject;
-    detail.textContent = `${state.commit.shortHash} by ${state.commit.author} • ${formatDate(state.commit.date)} • `;
+    detail.textContent = state.commit.hash === workingID ? "Tracked changes in the worktree and index • " : `${state.commit.shortHash} by ${state.commit.author} • ${formatDate(state.commit.date)} • `;
     detail.append(changeStats(state.commit.filesChanged, state.commit.additions, state.commit.deletions));
   }
   elements.commitHeading.append(title, detail);
@@ -508,23 +527,32 @@ function renderDescription(body) {
 }
 
 function renderVirtualDiff(files) {
+  const previous = state.virtualDiff?.files === files ? state.virtualDiff : null;
+  const priorHeights = new Map(previous?.blocks.map((block, index) => [block.key, previous.heights[index]]) || []);
   const blocks = [];
-  for (const file of files) {
+  for (const [fileIndex, file] of files.entries()) {
+    const first = blocks.length;
+    if (state.settings.collapseViewed && state.viewed.has(fileViewKey(file))) {
+      blocks.push({ file, collapsed: true, showHeader: true, key: `${fileIndex}:collapsed` });
+      blocks[first].last = true;
+      continue;
+    }
     if (file.binary || !file.hunks.length) {
-      blocks.push({ file, binary: true, lines: [], showHeader: true });
+      blocks.push({ file, binary: true, showHeader: true, last: true, key: `${fileIndex}:binary` });
       continue;
     }
     let showHeader = true;
-    for (const hunk of file.hunks) {
+    for (const [hunkIndex, hunk] of file.hunks.entries()) {
       for (let start = 0; start < hunk.lines.length; start += virtualBlockLines) {
-        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines), showHeader });
+        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines), showHeader, showHunk: start === 0, key: `${fileIndex}:${hunkIndex}:${start}` });
         showHeader = false;
       }
     }
+    if (blocks.length > first) blocks[blocks.length - 1].last = true;
   }
   const estimate = Math.max(state.settings.lineHeight * virtualBlockLines + 52, 220);
-  const heights = Array(blocks.length).fill(estimate);
-  state.virtualDiff = { blocks, heights, heightIndex: createHeightIndex(heights), start: 0, end: 0, container: null, scheduled: false };
+  const heights = blocks.map((block) => priorHeights.get(block.key) ?? (block.collapsed || block.binary ? 70 : estimate));
+  state.virtualDiff = { files, blocks, heights, heightIndex: createHeightIndex(heights), start: 0, end: 0, container: null, scheduled: false };
   const container = document.createElement("div");
   container.className = "virtual-diff";
   state.virtualDiff.container = container;
@@ -561,6 +589,8 @@ function updateVirtualDiff() {
 function renderVirtualBlock(block, index) {
   const section = document.createElement("section");
   section.className = "file-diff virtual-block";
+  section.classList.toggle("virtual-first", block.showHeader);
+  section.classList.toggle("virtual-last", Boolean(block.last));
   section.dataset.virtualIndex = index;
   section.classList.toggle("viewed", state.viewed.has(fileViewKey(block.file)));
   if (block.showHeader) {
@@ -575,7 +605,9 @@ function renderVirtualBlock(block, index) {
     header.append(status, name, changeStats(null, block.file.additions, block.file.deletions), renderViewedControl(block.file, section));
     section.append(header);
   }
-  if (block.binary) {
+  if (block.collapsed) {
+    // The header represents the entire viewed file in the virtual list.
+  } else if (block.binary) {
     const note = document.createElement("div");
     note.className = "binary-note";
     note.textContent = block.file.binary ? "Binary file changed" : "File metadata changed";
@@ -584,26 +616,28 @@ function renderVirtualBlock(block, index) {
     const table = document.createElement("table");
     table.className = "diff-table";
     const body = document.createElement("tbody");
-    const hunkRow = document.createElement("tr");
-    hunkRow.className = "hunk-row";
-    const hunkCell = document.createElement("td");
-    hunkCell.colSpan = 3;
-    const hunkHeader = document.createElement("div");
-    hunkHeader.className = "hunk-header";
-    const hunkLabel = document.createElement("span");
-    hunkLabel.textContent = block.hunk.header;
-    hunkHeader.append(hunkLabel);
-    if (state.contextLines < 100) {
-      const expand = document.createElement("button");
-      expand.type = "button";
-      expand.className = "expand-context";
-      expand.textContent = "Expand context";
-      expand.addEventListener("click", (event) => expandContext(event.currentTarget));
-      hunkHeader.prepend(expand);
+    if (block.showHunk) {
+      const hunkRow = document.createElement("tr");
+      hunkRow.className = "hunk-row";
+      const hunkCell = document.createElement("td");
+      hunkCell.colSpan = 3;
+      const hunkHeader = document.createElement("div");
+      hunkHeader.className = "hunk-header";
+      const hunkLabel = document.createElement("span");
+      hunkLabel.textContent = block.hunk.header;
+      hunkHeader.append(hunkLabel);
+      if (state.contextLines < 100) {
+        const expand = document.createElement("button");
+        expand.type = "button";
+        expand.className = "expand-context";
+        expand.textContent = "Expand context";
+        expand.addEventListener("click", (event) => expandContext(event.currentTarget));
+        hunkHeader.prepend(expand);
+      }
+      hunkCell.append(hunkHeader);
+      hunkRow.append(hunkCell);
+      body.append(hunkRow);
     }
-    hunkCell.append(hunkHeader);
-    hunkRow.append(hunkCell);
-    body.append(hunkRow);
     for (const line of block.lines) appendDiffLine(body, block.file, line);
     table.append(body);
     section.append(table);
@@ -614,6 +648,8 @@ function renderVirtualBlock(block, index) {
 
 function renderViewedControl(file, section) {
   const viewedKey = fileViewKey(file);
+  const commitHash = state.commit.hash;
+  const projectID = state.projectID;
   const control = document.createElement("label");
   control.className = "viewed-control";
   const checkbox = document.createElement("input");
@@ -624,18 +660,37 @@ function renderViewedControl(file, section) {
     const viewed = checkbox.checked;
     if (viewed) state.viewed.add(viewedKey);
     else state.viewed.delete(viewedKey);
-    section.classList.toggle("viewed", viewed);
-    const chainKey = `${state.commit.hash}\u0000${viewedKey}`;
+    if (state.settings.collapseViewed) refreshViewedFile(file, section.getBoundingClientRect().top);
+    else section.classList.toggle("viewed", viewed);
+    const chainKey = `${commitHash}\u0000${viewedKey}`;
     const previous = state.viewedSaveChains.get(chainKey) || Promise.resolve();
-    const save = previous.catch(() => {}).then(() => api(`/api/viewed/${encodeURIComponent(state.commit.hash)}`, {
+    const save = previous.catch(() => {}).then(() => api(`/api/viewed/${encodeURIComponent(commitHash)}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-DiffNote-Project": state.projectID },
+      headers: { "Content-Type": "application/json", "X-DiffNote-Project": projectID },
       body: JSON.stringify({ fileKey: viewedKey, viewed }),
     }));
     state.viewedSaveChains.set(chainKey, save);
-    void save.catch((error) => showToast(`Unable to update viewed file: ${error.message}`));
+    void save.catch((error) => {
+      if (state.commit?.hash === commitHash && state.viewed.has(viewedKey) === viewed) {
+        if (viewed) state.viewed.delete(viewedKey);
+        else state.viewed.add(viewedKey);
+        if (state.settings.collapseViewed) refreshViewedFile(file);
+        else section.classList.toggle("viewed", !viewed);
+      }
+      showToast(`Unable to update viewed file: ${error.message}`);
+    });
   });
   return control;
+}
+
+function refreshViewedFile(file, viewportTop) {
+  renderDiff();
+  const virtual = state.virtualDiff;
+  const index = virtual?.blocks.findIndex((block) => block.file === file);
+  if (index == null || index < 0 || viewportTop == null) return;
+  const containerTop = virtual.container.getBoundingClientRect().top - elements.reviewPane.getBoundingClientRect().top + elements.reviewPane.scrollTop;
+  elements.reviewPane.scrollTop = containerTop + virtual.heightIndex.sum(index) - (viewportTop - elements.reviewPane.getBoundingClientRect().top);
+  scheduleVirtualDiff();
 }
 
 function appendDiffLine(body, file, line) {
@@ -672,7 +727,7 @@ function observeVirtualBlock(section, index) {
     }
     const virtual = state.virtualDiff;
     if (!virtual || virtual.blocks[index] == null) return;
-    const nextHeight = Math.ceil(section.getBoundingClientRect().height);
+    const nextHeight = Math.ceil(section.getBoundingClientRect().height + parseFloat(getComputedStyle(section).marginBottom));
     const difference = nextHeight - virtual.heights[index];
     if (!difference) return;
     const aboveViewport = section.getBoundingClientRect().top < elements.reviewPane.getBoundingClientRect().top;
@@ -1414,6 +1469,7 @@ elements.settingsForm.addEventListener("submit", async (event) => {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
   const previousContext = state.settings.contextLines;
+  const previousCollapseViewed = state.settings.collapseViewed;
   const settings = readSettingsForm();
   try {
     await api("/api/settings", {
@@ -1425,6 +1481,7 @@ elements.settingsForm.addEventListener("submit", async (event) => {
     applySettings();
     elements.settingsDialog.close();
     if (state.commit && previousContext !== settings.contextLines) await selectCommit(state.commit.hash);
+    else if (state.commit && previousCollapseViewed !== settings.collapseViewed) renderDiff();
     showToast("Settings saved");
   } catch (error) {
     showToast(`Unable to save settings: ${error.message}`);
