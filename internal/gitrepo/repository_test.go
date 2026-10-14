@@ -87,6 +87,64 @@ func TestRepositoryReadsBranchesCommitsAndDiff(t *testing.T) {
 	}
 }
 
+func TestWorkingChangesIncludesOnlyTrackedPaths(t *testing.T) {
+	root := newTestRepository(t)
+	writeFile(t, root, "tracked.txt", "first\n")
+	git(t, root, "add", "tracked.txt")
+	git(t, root, "commit", "-m", "base")
+	writeFile(t, root, "untracked.txt", "ignore\n")
+	repo, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := repo.WorkingChanges()
+	if err != nil || changed {
+		t.Fatalf("untracked file appeared in working changes: %t, %v", changed, err)
+	}
+	writeFile(t, root, "tracked.txt", "second\n")
+	changed, err = repo.WorkingChanges()
+	if err != nil || !changed {
+		t.Fatalf("tracked edit missing: %t, %v", changed, err)
+	}
+	detail, err := repo.WorkingWithContext(3)
+	if err != nil || len(detail.Files) != 1 || detail.Files[0].NewPath != "tracked.txt" || detail.PatchID != WorkingPatchID {
+		t.Fatalf("unexpected worktree diff: %#v, %v", detail, err)
+	}
+	git(t, root, "add", "tracked.txt")
+	staged, err := repo.WorkingWithContext(3)
+	if err != nil || len(staged.Files) != 1 || staged.Files[0].Additions != 1 {
+		t.Fatalf("staged change missing: %#v, %v", staged, err)
+	}
+	writeFile(t, root, "staged-new.txt", "new\n")
+	git(t, root, "add", "staged-new.txt")
+	staged, err = repo.WorkingWithContext(3)
+	if err != nil || len(staged.Files) != 2 || staged.Files[0].Status != "added" && staged.Files[1].Status != "added" {
+		t.Fatalf("staged new file missing: %#v, %v", staged, err)
+	}
+}
+
+func TestWorkingChangesOnUnbornBranch(t *testing.T) {
+	root := newTestRepository(t)
+	writeFile(t, root, "new.txt", "new\n")
+	repo, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := repo.WorkingChanges()
+	if err != nil || changed {
+		t.Fatalf("untracked file appeared before initial commit: %t, %v", changed, err)
+	}
+	git(t, root, "add", "new.txt")
+	changed, err = repo.WorkingChanges()
+	if err != nil || !changed {
+		t.Fatalf("staged path missing before initial commit: %t, %v", changed, err)
+	}
+	detail, err := repo.WorkingWithContext(3)
+	if err != nil || len(detail.Files) != 1 || detail.Files[0].Status != "added" {
+		t.Fatalf("unexpected staged diff: %#v, %v", detail, err)
+	}
+}
+
 func TestPatchIDSurvivesRebase(t *testing.T) {
 	root := newTestRepository(t)
 	writeFile(t, root, "base.txt", "base\n")

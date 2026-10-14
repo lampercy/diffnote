@@ -48,6 +48,7 @@ type commitsResponse struct {
 	Commits []gitrepo.Commit `json:"commits"`
 	Total   int              `json:"total"`
 	Tip     string           `json:"tip"`
+	Working bool             `json:"working"`
 }
 
 type commentsResponse struct {
@@ -77,15 +78,15 @@ type directoriesResponse struct {
 }
 
 type appSettings struct {
-	Font           string `json:"font"`
-	FontSize       int    `json:"fontSize"`
-	LineHeight     int    `json:"lineHeight"`
-	Theme          string `json:"theme"`
-	WrapLines      bool   `json:"wrapLines"`
-	SidebarWidth     int `json:"sidebarWidth"`
-	CommitListHeight int `json:"commitListHeight"`
-	ContextLines     int `json:"contextLines"`
-	CollapseViewed bool   `json:"collapseViewed"`
+	Font             string `json:"font"`
+	FontSize         int    `json:"fontSize"`
+	LineHeight       int    `json:"lineHeight"`
+	Theme            string `json:"theme"`
+	WrapLines        bool   `json:"wrapLines"`
+	SidebarWidth     int    `json:"sidebarWidth"`
+	CommitListHeight int    `json:"commitListHeight"`
+	ContextLines     int    `json:"contextLines"`
+	CollapseViewed   bool   `json:"collapseViewed"`
 }
 
 func main() {
@@ -373,7 +374,7 @@ func (s *server) handleViewedFiles(w http.ResponseWriter, request *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	files, err := s.store.ViewedFiles(repo.ID, request.PathValue("hash"))
+	files, err := s.store.ViewedFiles(reviewStoreID(repo, request.PathValue("hash")), request.PathValue("hash"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -395,7 +396,7 @@ func (s *server) handleSetViewed(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid viewed payload"))
 		return
 	}
-	if err := s.store.SetViewed(repo.ID, request.PathValue("hash"), payload.FileKey, payload.Viewed); err != nil {
+	if err := s.store.SetViewed(reviewStoreID(repo, request.PathValue("hash")), request.PathValue("hash"), payload.FileKey, payload.Viewed); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -445,6 +446,15 @@ func (s *server) handleCommits(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("commit search is too long"))
 		return
 	}
+	working := false
+	selectedRef := request.URL.Query().Get("ref")
+	if offset == 0 && search == "" && request.URL.Query().Get("tip") == "" && (selectedRef == repo.CurrentBranch || selectedRef == "HEAD") {
+		working, err = repo.WorkingChanges()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	if ref == "" {
 		ref = request.URL.Query().Get("ref")
 		ref, err = repo.ResolveCommit(ref)
@@ -453,7 +463,7 @@ func (s *server) handleCommits(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 		if ref == "" {
-			writeJSON(w, http.StatusOK, commitsResponse{Commits: []gitrepo.Commit{}})
+			writeJSON(w, http.StatusOK, commitsResponse{Commits: []gitrepo.Commit{}, Working: working})
 			return
 		}
 	}
@@ -470,7 +480,21 @@ func (s *server) handleCommits(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, commitsResponse{Commits: commits, Total: total, Tip: ref})
+	writeJSON(w, http.StatusOK, commitsResponse{Commits: commits, Total: total, Tip: ref, Working: working})
+}
+
+func (s *server) reviewDetail(repository *gitrepo.Repository, hash string, contextLines int) (*gitrepo.CommitDetail, error) {
+	if hash == gitrepo.WorkingID {
+		return repository.WorkingWithContext(contextLines)
+	}
+	return repository.CommitWithContext(hash, contextLines)
+}
+
+func reviewStoreID(repo *gitrepo.Repository, hash string) string {
+	if hash == gitrepo.WorkingID {
+		return repo.ContextID + ":" + repo.CurrentBranch
+	}
+	return repo.ID
 }
 
 func (s *server) handleCommit(w http.ResponseWriter, request *http.Request) {
@@ -492,7 +516,7 @@ func (s *server) handleCommit(w http.ResponseWriter, request *http.Request) {
 		}
 		contextLines = parsedContext
 	}
-	commit, err := repo.CommitWithContext(request.PathValue("hash"), contextLines)
+	commit, err := s.reviewDetail(repo, request.PathValue("hash"), contextLines)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -510,13 +534,13 @@ func (s *server) handleComments(w http.ResponseWriter, request *http.Request) {
 	if !s.acquireGit(request.Context()) {
 		return
 	}
-	detail, err := repo.CommitWithContext(hash, 100)
+	detail, err := s.reviewDetail(repo, hash, 100)
 	s.releaseGit()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	result, err := s.store.Comments(repo.ID, hash, detail.PatchID)
+	result, err := s.store.Comments(reviewStoreID(repo, hash), hash, detail.PatchID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -535,7 +559,12 @@ func (s *server) handleSaveComments(w http.ResponseWriter, request *http.Request
 	if !s.acquireGit(request.Context()) {
 		return
 	}
-	patchID, err := repo.PatchID(hash)
+	patchID := gitrepo.WorkingPatchID
+	if hash == gitrepo.WorkingID {
+		_, err = repo.WorkingChanges()
+	} else {
+		patchID, err = repo.PatchID(hash)
+	}
 	s.releaseGit()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -561,7 +590,7 @@ func (s *server) handleSaveComments(w http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	newRevision, err := s.store.Save(repo.ID, hash, patchID, payload.Revision, comments)
+	newRevision, err := s.store.Save(reviewStoreID(repo, hash), hash, patchID, payload.Revision, comments)
 	if err != nil {
 		if errors.Is(err, store.ErrRevisionConflict) {
 			writeError(w, http.StatusConflict, err)

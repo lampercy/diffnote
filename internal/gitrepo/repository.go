@@ -65,6 +65,69 @@ type CommitDetail struct {
 	Files   []FileDiff `json:"files"`
 }
 
+const (
+	WorkingID      = "working"
+	WorkingPatchID = "working-tree"
+)
+
+// WorkingChanges compares HEAD with tracked worktree paths, including staged edits.
+// git diff against a tree never includes untracked files.
+func (r *Repository) WorkingChanges() (bool, error) {
+	base, err := r.workingBase()
+	if err != nil {
+		return false, err
+	}
+	args := []string{"diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv"}
+	if base == "" {
+		args = append(args, "--cached")
+	} else {
+		args = append(args, "--end-of-options", base)
+	}
+	output, err := runBytesAt(r.Root, args...)
+	return len(output) > 0, err
+}
+
+func (r *Repository) workingBase() (string, error) {
+	base, err := runAt(r.Root, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
+	if err == nil {
+		return strings.TrimSpace(base), nil
+	}
+	return "", nil // On an unborn branch, only staged paths are tracked.
+}
+
+func (r *Repository) WorkingWithContext(contextLines int) (*CommitDetail, error) {
+	if contextLines < 0 || contextLines > 100 {
+		return nil, errors.New("diff context must be between 0 and 100 lines")
+	}
+	base, err := r.workingBase()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-c", "core.quotePath=false", "diff", "--find-renames", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", "--full-index", "--unified=" + strconv.Itoa(contextLines)}
+	if base == "" {
+		args = append(args, "--cached")
+	} else {
+		args = append(args, "--end-of-options", base)
+	}
+	patch, err := runBytesAt(r.Root, args...)
+	if err != nil {
+		return nil, err
+	}
+	files, err := ParseUnifiedDiff(string(patch))
+	if err != nil {
+		return nil, err
+	}
+	additions, deletions := 0, 0
+	for _, file := range files {
+		additions += file.Additions
+		deletions += file.Deletions
+	}
+	return &CommitDetail{
+		Commit: Commit{Hash: WorkingID, ShortHash: WorkingID, Subject: "Uncommitted tracked changes", FilesChanged: len(files), Additions: additions, Deletions: deletions},
+		PatchID: WorkingPatchID, Files: files,
+	}, nil
+}
+
 func Open(path string) (*Repository, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

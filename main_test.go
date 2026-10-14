@@ -137,6 +137,70 @@ func TestReviewAPI(t *testing.T) {
 	}
 }
 
+func TestWorkingReviewAPI(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-b", "main")
+	runGit(t, root, "config", "user.name", "DiffNote Test")
+	runGit(t, root, "config", "user.email", "diffnote@example.com")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := gitrepo.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewStore, err := store.Open(databasePathForTest(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reviewStore.Close()
+	app := (&server{repo: repo, store: reviewStore, gitSlots: make(chan struct{}, 2)}).routes("example.com")
+	history := serve(t, app, http.MethodGet, "/api/commits?ref=main", nil, "")
+	var page commitsResponse
+	if err := json.Unmarshal(history.Body.Bytes(), &page); err != nil || page.Working {
+		t.Fatalf("untracked change reported: %#v, %v", page, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	history = serve(t, app, http.MethodGet, "/api/commits?ref=main", nil, "")
+	if err := json.Unmarshal(history.Body.Bytes(), &page); err != nil || !page.Working {
+		t.Fatalf("working change missing: %#v, %v", page, err)
+	}
+	detail := serve(t, app, http.MethodGet, "/api/commits/working", nil, "")
+	var commit gitrepo.CommitDetail
+	if err := json.Unmarshal(detail.Body.Bytes(), &commit); err != nil || len(commit.Files) != 1 || commit.Files[0].NewPath != "tracked.txt" {
+		t.Fatalf("unexpected working diff: %#v, %v", commit, err)
+	}
+	review := serve(t, app, http.MethodGet, "/api/comments/working", nil, "")
+	var initial commentsResponse
+	if err := json.Unmarshal(review.Body.Bytes(), &initial); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(fmt.Sprintf(`{"revision":%q,"comments":[{"id":"work-1","filePath":"tracked.txt","side":"new","line":1,"context":"+second","body":"Please revise"}]}`, initial.Revision))
+	saved := serve(t, app, http.MethodPut, "/api/comments/working", payload, "")
+	if saved.Code != http.StatusOK {
+		t.Fatalf("save working comment: %d %s", saved.Code, saved.Body.String())
+	}
+	loaded := serve(t, app, http.MethodGet, "/api/comments/working", nil, "")
+	if !bytes.Contains(loaded.Body.Bytes(), []byte("Please revise")) {
+		t.Fatalf("working comment missing: %s", loaded.Body.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("third\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded = serve(t, app, http.MethodGet, "/api/comments/working", nil, "")
+	var changed commentsResponse
+	if err := json.Unmarshal(loaded.Body.Bytes(), &changed); err != nil || len(changed.Orphans) != 1 || len(changed.Comments) != 0 {
+		t.Fatalf("edited anchor should be unattached: %#v, %v", changed, err)
+	}
+}
+
 func TestAllowedRequestHost(t *testing.T) {
 	tests := []struct {
 		name     string
