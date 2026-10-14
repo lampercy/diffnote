@@ -543,8 +543,9 @@ function renderVirtualDiff(files) {
     }
     let showHeader = true;
     for (const [hunkIndex, hunk] of file.hunks.entries()) {
+      const expandable = hasOmittedContextBefore(file.hunks, hunkIndex);
       for (let start = 0; start < hunk.lines.length; start += virtualBlockLines) {
-        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines), showHeader, showHunk: start === 0, key: `${fileIndex}:${hunkIndex}:${start}` });
+        blocks.push({ file, hunk, lines: hunk.lines.slice(start, start + virtualBlockLines), showHeader, showHunk: start === 0, expandable, key: `${fileIndex}:${hunkIndex}:${start}` });
         showHeader = false;
       }
     }
@@ -558,6 +559,15 @@ function renderVirtualDiff(files) {
   state.virtualDiff.container = container;
   elements.diffRoot.append(container);
   updateVirtualDiff();
+}
+
+function hasOmittedContextBefore(hunks, index) {
+  const current = /^@@ -(\d+)(?:,(\d+))? \+/.exec(hunks[index].header);
+  if (!current) return false;
+  const start = Number(current[1]);
+  if (index === 0) return start > 1;
+  const previous = /^@@ -(\d+)(?:,(\d+))? \+/.exec(hunks[index - 1].header);
+  return Boolean(previous) && start > Number(previous[1]) + Number(previous[2] ?? 1);
 }
 
 function updateVirtualDiff() {
@@ -626,7 +636,7 @@ function renderVirtualBlock(block, index) {
       const hunkLabel = document.createElement("span");
       hunkLabel.textContent = block.hunk.header;
       hunkHeader.append(hunkLabel);
-      if (state.contextLines < 100) {
+      if (state.contextLines < 100 && block.expandable) {
         const expand = document.createElement("button");
         expand.type = "button";
         expand.className = "expand-context";
