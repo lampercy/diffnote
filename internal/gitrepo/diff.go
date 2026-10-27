@@ -32,15 +32,24 @@ type DiffLine struct {
 
 var hunkPattern = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
+// A byte limit alone permits millions of tiny lines to inflate into gigabytes
+// of parsed records and JSON. Bound records as well as subprocess output.
+const maxDiffRecords = 250_000
+
 func ParseUnifiedDiff(input string) ([]FileDiff, error) {
 	var files []FileDiff
 	var file *FileDiff
 	var hunk *Hunk
 	oldLine, newLine := 0, 0
+	maxDiffRecordsRemaining := maxDiffRecords
 
 	scanner := bufio.NewScanner(strings.NewReader(input))
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
+		maxDiffRecordsRemaining--
+		if maxDiffRecordsRemaining < 0 {
+			return nil, fmt.Errorf("diff exceeds %d lines; review a smaller commit", maxDiffRecords)
+		}
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
@@ -61,12 +70,12 @@ func ParseUnifiedDiff(input string) ([]FileDiff, error) {
 			file.NewPath = decodeGitPath(strings.TrimPrefix(line, "rename to "))
 		case strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch"):
 			file.Binary = true
-		case strings.HasPrefix(line, "--- "):
+		case hunk == nil && strings.HasPrefix(line, "--- "):
 			path := parseMarkerPath(strings.TrimPrefix(line, "--- "))
 			if path != "/dev/null" {
 				file.OldPath = path
 			}
-		case strings.HasPrefix(line, "+++ "):
+		case hunk == nil && strings.HasPrefix(line, "+++ "):
 			path := parseMarkerPath(strings.TrimPrefix(line, "+++ "))
 			if path != "/dev/null" {
 				file.NewPath = path
@@ -100,6 +109,9 @@ func ParseUnifiedDiff(input string) ([]FileDiff, error) {
 				oldLine++
 				newLine++
 			default:
+				if !strings.HasPrefix(line, "\\ No newline at end of file") {
+					continue // Git record separators are not source lines.
+				}
 				diffLine.Kind = "meta"
 			}
 			hunk.Lines = append(hunk.Lines, diffLine)

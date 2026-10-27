@@ -1,6 +1,45 @@
 package gitrepo
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDiffRecordBudget(t *testing.T) {
+	// Less than one MiB of Git output must not create millions of objects.
+	_, err := ParseUnifiedDiff("diff --git a/a b/a\n@@ -0,0 +1,300000 @@\n" + strings.Repeat("+\n", maxDiffRecords))
+	if err == nil || !strings.Contains(err.Error(), "review a smaller commit") {
+		t.Fatalf("expected bounded diff error, got %v", err)
+	}
+}
+
+func TestDiffSeparatorsAndMarkerLikeSource(t *testing.T) {
+	files, err := ParseUnifiedDiff("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n--- removed\n+++ added\n \n\\ No newline at end of file\n\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := files[0]
+	if file.OldPath != "a" || file.NewPath != "a" || len(file.Hunks[0].Lines) != 4 {
+		t.Fatalf("source markers or separator parsed incorrectly: %#v", file)
+	}
+	lines := file.Hunks[0].Lines
+	assertLine(t, lines[0], "delete", 1, 0)
+	assertLine(t, lines[1], "add", 0, 1)
+	assertLine(t, lines[2], "context", 2, 2)
+	assertLine(t, lines[3], "meta", 0, 0)
+}
+
+func TestPatchIdentityShortLinesAllocation(t *testing.T) {
+	patch := []byte(strings.Repeat("+\n", 300_000))
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			canonicalPatchID(patch)
+		}
+	})
+	if result.AllocedBytesPerOp() > 64*1024 {
+		t.Fatalf("patch identity allocated %d bytes for short lines", result.AllocedBytesPerOp())
+	}
+}
 
 func TestParseUnifiedDiff(t *testing.T) {
 	diff := `diff --git a/old name.txt b/new name.txt

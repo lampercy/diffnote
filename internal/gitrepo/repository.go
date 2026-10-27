@@ -123,7 +123,7 @@ func (r *Repository) WorkingWithContext(contextLines int) (*CommitDetail, error)
 		deletions += file.Deletions
 	}
 	return &CommitDetail{
-		Commit: Commit{Hash: WorkingID, ShortHash: WorkingID, Subject: "Uncommitted tracked changes", FilesChanged: len(files), Additions: additions, Deletions: deletions},
+		Commit:  Commit{Hash: WorkingID, ShortHash: WorkingID, Subject: "Uncommitted tracked changes", FilesChanged: len(files), Additions: additions, Deletions: deletions},
 		PatchID: WorkingPatchID, Files: files,
 	}, nil
 }
@@ -440,17 +440,24 @@ func (r *Repository) patch(hash string, contextLines int) ([]byte, error) {
 
 func canonicalPatchID(patch []byte) string {
 	hash := sha256.New()
-	for _, line := range bytes.Split(patch, []byte{'\n'}) {
-		if bytes.HasPrefix(line, []byte("index ")) {
-			continue
-		}
-		if bytes.HasPrefix(line, []byte("@@ ")) {
-			if marker := bytes.Index(line[3:], []byte(" @@")); marker >= 0 {
-				line = append([]byte("@@"), line[3+marker+3:]...)
+	// Iterate without a slice entry per line: short-line patches otherwise
+	// allocate hundreds of MiB just to compute their identity.
+	newline := []byte{'\n'}
+	for {
+		line, rest, more := bytes.Cut(patch, newline)
+		patch = rest
+		if !bytes.HasPrefix(line, []byte("index ")) {
+			if bytes.HasPrefix(line, []byte("@@ ")) {
+				if marker := bytes.Index(line[3:], []byte(" @@")); marker >= 0 {
+					line = append([]byte("@@"), line[3+marker+3:]...)
+				}
 			}
+			hash.Write(line)
+			hash.Write(newline)
 		}
-		hash.Write(line)
-		hash.Write([]byte{'\n'})
+		if !more {
+			break
+		}
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }

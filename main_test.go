@@ -11,11 +11,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/percy/diffnote/internal/gitrepo"
 	"github.com/percy/diffnote/internal/store"
 )
+
+func TestOversizedCommitReturnsErrorAndServerRemainsUsable(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-b", "main")
+	runGit(t, root, "config", "user.name", "DiffNote Test")
+	runGit(t, root, "config", "user.email", "diffnote@example.com")
+	if err := os.WriteFile(filepath.Join(root, "many-lines.txt"), []byte(strings.Repeat("x\n", 260_000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "large short-line commit")
+	hash := runGit(t, root, "rev-parse", "HEAD")
+	repo, err := gitrepo.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := (&server{repo: repo, web: http.NotFoundHandler(), gitSlots: make(chan struct{}, 1)}).routes("example.com")
+	response := serve(t, app, http.MethodGet, "/api/commits/"+hash, nil, "")
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("review a smaller commit")) {
+		t.Fatalf("expected actionable size error, got %d: %s", response.Code, response.Body.String())
+	}
+	// A rejected diff must release the Git concurrency slot.
+	response = serve(t, app, http.MethodGet, "/api/commits/"+hash+"?context=invalid", nil, "")
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("invalid diff context")) {
+		t.Fatalf("server unusable after oversized diff: %d: %s", response.Code, response.Body.String())
+	}
+}
 
 func TestReviewAPI(t *testing.T) {
 	root := t.TempDir()

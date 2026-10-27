@@ -1,4 +1,4 @@
-.PHONY: build check clean dev fmt install lint test uninstall
+.PHONY: build check clean dev fmt install lint test test-web uninstall
 
 ARGS ?=
 BINDIR ?= $(HOME)/.local/bin
@@ -12,6 +12,9 @@ build:
 test:
 	go test -race ./...
 
+test-web:
+	npm test
+
 lint:
 	go vet ./...
 	node --check web/app.js
@@ -19,7 +22,7 @@ lint:
 fmt:
 	gofmt -w *.go internal/gitrepo/*.go internal/store/*.go
 
-check: test lint
+check: test test-web lint
 
 install: build
 	install -d "$(BINDIR)"

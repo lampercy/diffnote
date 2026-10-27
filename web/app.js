@@ -375,6 +375,7 @@ async function selectCommit(hash) {
   state.files = [];
   renderFiles();
   state.contextLines = state.settings.contextLines;
+  disposeVirtualDiff();
   state.virtualDiff = null;
   document.querySelectorAll(".commit-card").forEach((card) => {
     card.classList.toggle("selected", card.dataset.hash === hash);
@@ -493,6 +494,8 @@ function renderCommitHeading() {
 }
 
 function renderDiff(focusCommentID = "") {
+  const viewport = captureDiffViewport();
+  disposeVirtualDiff();
   elements.diffRoot.replaceChildren();
   if (!state.commit) {
     elements.diffRoot.append(emptyState("No commit selected", "Select a commit to start reviewing."));
@@ -508,9 +511,10 @@ function renderDiff(focusCommentID = "") {
   if (state.orphans.length) elements.diffRoot.append(renderOrphans());
 
   renderVirtualDiff(state.commit.files);
+  restoreDiffViewport(viewport);
   updateCopyButton();
   if (focusCommentID) {
-    requestAnimationFrame(() => document.querySelector(`[data-comment-id="${CSS.escape(focusCommentID)}"] textarea`)?.focus());
+    requestAnimationFrame(() => document.querySelector(`[data-comment-id="${CSS.escape(focusCommentID)}"] textarea`)?.focus({ preventScroll: true }));
   }
 }
 
@@ -551,12 +555,25 @@ function renderVirtualDiff(files) {
     }
     if (blocks.length > first) blocks[blocks.length - 1].last = true;
   }
-  const estimate = Math.max(state.settings.lineHeight * virtualBlockLines + 52, 220);
-  const heights = blocks.map((block) => priorHeights.get(block.key) ?? (block.collapsed || block.binary ? 70 : estimate));
-  state.virtualDiff = { files, blocks, heights, heightIndex: createHeightIndex(heights), start: 0, end: 0, container: null, scheduled: false };
+  const heights = blocks.map((block) => priorHeights.get(block.key) ?? (block.collapsed || block.binary ? 70 : block.lines.length * state.settings.lineHeight + (block.showHeader ? 48 : 0) + (block.showHunk ? 30 : 0) + (block.last ? 19 : 0)));
+  state.virtualDiff = { files, blocks, heights, heightIndex: createHeightIndex(heights), start: 0, end: 0, container: null, scheduled: false, mounted: new Map(), observer: null };
   const container = document.createElement("div");
   container.className = "virtual-diff";
   state.virtualDiff.container = container;
+  const virtual = state.virtualDiff;
+  virtual.observer = new ResizeObserver((entries) => {
+    if (state.virtualDiff !== virtual) return;
+    for (const { target: section } of entries) {
+      if (!section.isConnected) continue;
+      const index = Number(section.dataset.virtualIndex);
+      const nextHeight = section.getBoundingClientRect().height + parseFloat(getComputedStyle(section).marginBottom);
+      const difference = nextHeight - virtual.heights[index];
+      if (!difference) continue;
+      virtual.heights[index] = nextHeight;
+      virtual.heightIndex.add(index, difference);
+    }
+    scheduleVirtualDiff();
+  });
   elements.diffRoot.append(container);
   updateVirtualDiff();
 }
@@ -580,20 +597,34 @@ function updateVirtualDiff() {
   const start = virtual.heightIndex.find(viewportStart);
   const end = Math.min(virtual.blocks.length, virtual.heightIndex.find(viewportEnd) + 1);
   const offset = virtual.heightIndex.sum(start);
-  if (start === virtual.start && end === virtual.end && virtual.container.childElementCount) return;
+  const viewport = captureDiffViewport();
   virtual.start = start;
   virtual.end = end;
-  const fragment = document.createDocumentFragment();
   const top = document.createElement("div");
   top.className = "virtual-spacer";
   top.style.height = `${offset}px`;
-  fragment.append(top);
-  for (let index = start; index < end; index++) fragment.append(renderVirtualBlock(virtual.blocks[index], index));
   const bottom = document.createElement("div");
   bottom.className = "virtual-spacer";
   bottom.style.height = `${virtual.heightIndex.total() - virtual.heightIndex.sum(end)}px`;
-  fragment.append(bottom);
-  virtual.container.replaceChildren(fragment);
+  // Reuse overlapping blocks: replacing them destroys editor focus and selection.
+  for (const [index, section] of virtual.mounted) {
+    if (index >= start && index < end) continue;
+    virtual.observer.unobserve(section);
+    section.remove();
+    virtual.mounted.delete(index);
+  }
+  virtual.container.querySelectorAll(":scope > .virtual-spacer").forEach((node) => node.remove());
+  virtual.container.prepend(top);
+  for (let index = start; index < end; index++) {
+    if (!virtual.mounted.has(index)) {
+      const section = renderVirtualBlock(virtual.blocks[index], index);
+      virtual.mounted.set(index, section);
+      const next = [...virtual.container.children].find(node => Number(node.dataset.virtualIndex) > index);
+      virtual.container.insertBefore(section, next || null);
+    }
+  }
+  virtual.container.append(bottom);
+  restoreDiffViewport(viewport, false);
 }
 
 function renderVirtualBlock(block, index) {
@@ -652,7 +683,7 @@ function renderVirtualBlock(block, index) {
     table.append(body);
     section.append(table);
   }
-  observeVirtualBlock(section, index);
+  state.virtualDiff.observer.observe(section);
   return section;
 }
 
@@ -729,24 +760,36 @@ function appendDiffLine(body, file, line) {
   for (const comment of lineComments) body.append(renderComment(comment));
 }
 
-function observeVirtualBlock(section, index) {
-  const observer = new ResizeObserver(() => {
-    if (!section.isConnected) {
-      observer.disconnect();
-      return;
-    }
-    const virtual = state.virtualDiff;
-    if (!virtual || virtual.blocks[index] == null) return;
-    const nextHeight = Math.ceil(section.getBoundingClientRect().height + parseFloat(getComputedStyle(section).marginBottom));
-    const difference = nextHeight - virtual.heights[index];
-    if (!difference) return;
-    const aboveViewport = section.getBoundingClientRect().top < elements.reviewPane.getBoundingClientRect().top;
-    virtual.heights[index] = nextHeight;
-    virtual.heightIndex.add(index, difference);
-    if (aboveViewport) elements.reviewPane.scrollTop += difference;
-    scheduleVirtualDiff();
-  });
-  observer.observe(section);
+function disposeVirtualDiff() {
+  state.virtualDiff?.observer?.disconnect();
+}
+
+function captureDiffViewport() {
+  if (!state.virtualDiff?.container?.isConnected) return null;
+  const top = elements.reviewPane.getBoundingClientRect().top + document.querySelector(".review-toolbar").getBoundingClientRect().height;
+  const rows = [...elements.diffRoot.querySelectorAll(".line-row[data-anchor]")];
+  const row = rows.find(row => row.getBoundingClientRect().top >= top);
+  return row ? { key: row.dataset.anchor, top: row.getBoundingClientRect().top } : null;
+}
+
+function restoreDiffViewport(viewport, render = true) {
+  const virtual = state.virtualDiff;
+  if (!viewport || !virtual) return;
+  let row = [...elements.diffRoot.querySelectorAll(".line-row[data-anchor]")].find(row => row.dataset.anchor === viewport.key);
+  if (!row && render) {
+    const anchor = JSON.parse(viewport.key);
+    const index = virtual.blocks.findIndex(block => block.lines?.some(line => {
+      const candidate = lineAnchor(block.file, line);
+      return candidate && candidate.filePath === anchor[0] && candidate.side === anchor[1] && candidate.line === anchor[2] && candidate.context === anchor[3];
+    }));
+    if (index < 0) return;
+    const containerTop = virtual.container.getBoundingClientRect().top - elements.reviewPane.getBoundingClientRect().top + elements.reviewPane.scrollTop;
+    elements.reviewPane.scrollTop = containerTop + virtual.heightIndex.sum(index);
+    updateVirtualDiff();
+    row = [...elements.diffRoot.querySelectorAll(".line-row[data-anchor]")].find(row => row.dataset.anchor === viewport.key);
+  }
+  if (row) elements.reviewPane.scrollTop += row.getBoundingClientRect().top - viewport.top;
+  if (render) scheduleVirtualDiff();
 }
 
 function createHeightIndex(heights) {
@@ -836,11 +879,7 @@ async function expandContext(button) {
     state.commit = commit;
     state.contextLines = contextLines;
     renderDiff();
-    if (viewportAnchor && viewportTop != null) {
-      const restoredRow = [...elements.diffRoot.querySelectorAll(".line-row[data-anchor]")]
-        .find((row) => row.dataset.anchor === viewportAnchor);
-      if (restoredRow) elements.reviewPane.scrollTop += restoredRow.getBoundingClientRect().top - viewportTop;
-    }
+    if (viewportAnchor && viewportTop != null) restoreDiffViewport({ key: viewportAnchor, top: viewportTop });
   } catch (error) {
     if (sequence === state.loadSequence) showToast(`Unable to expand: ${error.message}`);
   }
@@ -925,7 +964,7 @@ function addComment(anchor) {
   row.classList.add("has-comment");
   const commentRow = renderComment(comment);
   row.after(commentRow);
-  requestAnimationFrame(() => commentRow.querySelector("textarea")?.focus());
+  requestAnimationFrame(() => commentRow.querySelector("textarea")?.focus({ preventScroll: true }));
 }
 
 function renderComment(comment) {
